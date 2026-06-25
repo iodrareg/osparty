@@ -1,0 +1,515 @@
+package net.osparty.party;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import javax.swing.SwingUtilities;
+import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.party.PartyMember;
+import net.runelite.client.party.PartyService;
+import net.runelite.client.party.WSClient;
+
+/**
+ * The plugin's view of the live RuneLite peer-to-peer party, plus a
+ * host-authoritative user-management layer on top of it.
+ *
+ * <p>RuneLite's {@link PartyService} is a passphrase-keyed message bus with no
+ * host and no access control. This class adds one: the creator hosts, holds the
+ * authoritative admitted roster, and broadcasts it via {@link PartyStateMessage}
+ * so every peer renders the same membership. Applicants who join the room are
+ * <em>pending</em> until the host admits them; kicks/declines are delivered as
+ * {@link MemberCommand}s the target honours by leaving. Each member self-reports
+ * gear/inventory/stats via {@link PlayerUpdate}.
+ *
+ * <p>Enforcement is cooperative — a modified client could ignore it — which is
+ * the same trust model as the rest of the party network.
+ *
+ * <p>Messages arrive on the websocket thread and UI reads on the EDT, so shared
+ * state uses concurrent collections and listeners must marshal to the EDT.
+ */
+@Slf4j
+@Singleton
+public class LiveParty
+{
+	public enum Status
+	{
+		HOST, MEMBER, PENDING
+	}
+
+	/** A roster row for the UI: who they are, their standing, and their live data. */
+	@Value
+	public static class RosterMember
+	{
+		long memberId;
+		String name;
+		Status status;
+		PlayerUpdate data; // nullable until they sync
+		boolean local;
+	}
+
+	private final PartyService partyService;
+	private final WSClient wsClient;
+	private final Client client;
+	private final ClientThread clientThread;
+
+	private final Map<Long, PlayerUpdate> playerData = new ConcurrentHashMap<>();
+	private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
+
+	// Locally-injected fake applicants for host-side testing. They live only in
+	// this client (negative ids, never broadcast) so the Admit/Decline flow can be
+	// exercised without a second account.
+	private final Map<Long, PlayerUpdate> simulated = new ConcurrentHashMap<>();
+	private final Set<Long> simulatedAdmitted = ConcurrentHashMap.newKeySet();
+	private long simSeq = -1L;
+
+	// Host-authoritative state (only meaningful while hosting).
+	private volatile boolean hosting;
+	private volatile String hostName;
+	private volatile int capacity;
+	private volatile boolean locked;
+	/** Admitted applicants (excludes the host). memberId -> display name. */
+	private final Map<Long, String> admitted = new ConcurrentHashMap<>();
+
+	/** Last state received from the host (non-host clients). */
+	private volatile PartyStateMessage lastState;
+
+	private volatile boolean stateDirty; // host: roster/config changed, needs rebroadcast
+	private volatile boolean localDirty;  // self: our PlayerUpdate changed, needs rebroadcast
+
+	/** Invoked (off-EDT) when our membership ends — host closed, or we were kicked. */
+	private volatile Runnable onEnded;
+
+	@Inject
+	private LiveParty(PartyService partyService, WSClient wsClient, Client client, ClientThread clientThread)
+	{
+		this.partyService = partyService;
+		this.wsClient = wsClient;
+		this.client = client;
+		this.clientThread = clientThread;
+	}
+
+	public void register()
+	{
+		wsClient.registerMessage(PlayerUpdate.class);
+		wsClient.registerMessage(PartyStateMessage.class);
+		wsClient.registerMessage(MemberCommand.class);
+	}
+
+	public void unregister()
+	{
+		wsClient.unregisterMessage(PlayerUpdate.class);
+		wsClient.unregisterMessage(PartyStateMessage.class);
+		wsClient.unregisterMessage(MemberCommand.class);
+		reset();
+	}
+
+	public void addListener(Runnable listener)
+	{
+		listeners.add(listener);
+	}
+
+	public void setOnEnded(Runnable onEnded)
+	{
+		this.onEnded = onEnded;
+	}
+
+	// ---- connection lifecycle ------------------------------------------------
+
+	/**
+	 * Generate a fresh passphrase and deliver it on the EDT. RuneLite builds the
+	 * passphrase from item names and asserts it runs on the client thread, so we
+	 * hop there and marshal the result back for the (Swing) caller.
+	 */
+	public void generatePassphrase(Consumer<String> onGenerated)
+	{
+		clientThread.invoke(() -> {
+			String passphrase = partyService.generatePassphrase();
+			SwingUtilities.invokeLater(() -> onGenerated.accept(passphrase));
+		});
+	}
+
+	/** Host {@code passphrase}'s room with the given rules. */
+	public void hostParty(String passphrase, String hostName, int capacity,
+		boolean locked)
+	{
+		reset();
+		hosting = true;
+		this.hostName = hostName;
+		this.capacity = capacity;
+		this.locked = locked;
+		stateDirty = true;
+		localDirty = true;
+		partyService.changeParty(passphrase);
+		fire();
+	}
+
+	/** Join an advertised room as an applicant (pending until the host admits). */
+	public void joinParty(String passphrase)
+	{
+		reset();
+		localDirty = true;
+		partyService.changeParty(passphrase);
+		fire();
+	}
+
+	/** Leave the room. Hosts send a closing state first, best effort. */
+	public void leave()
+	{
+		if (hosting && isLocalReady())
+		{
+			PartyStateMessage closing = buildState();
+			closing.setClosed(true);
+			partyService.send(closing);
+		}
+		partyService.changeParty(null);
+		reset();
+		fire();
+	}
+
+	private void reset()
+	{
+		hosting = false;
+		hostName = null;
+		capacity = 0;
+		locked = false;
+		admitted.clear();
+		playerData.clear();
+		simulated.clear();
+		simulatedAdmitted.clear();
+		simSeq = -1L;
+		lastState = null;
+		stateDirty = false;
+		localDirty = false;
+	}
+
+	public boolean isConnected()
+	{
+		return partyService.isInParty();
+	}
+
+	public boolean isHosting()
+	{
+		return hosting;
+	}
+
+	public String passphrase()
+	{
+		return partyService.getPartyPassphrase();
+	}
+
+	// ---- host actions --------------------------------------------------------
+
+	/** @return true if another applicant can still be admitted (host + admitted < capacity). */
+	public boolean canAdmitMore()
+	{
+		return capacity <= 0 || admitted.size() + simulatedAdmitted.size() + 1 < capacity;
+	}
+
+	public boolean admit(long memberId, String name)
+	{
+		if (!hosting || !canAdmitMore())
+		{
+			return false;
+		}
+		if (simulated.containsKey(memberId))
+		{
+			simulatedAdmitted.add(memberId);
+			fire();
+			return true;
+		}
+		admitted.put(memberId, name);
+		stateDirty = true;
+		fire();
+		return true;
+	}
+
+	public void kick(long memberId)
+	{
+		if (!hosting)
+		{
+			return;
+		}
+		if (simulated.remove(memberId) != null)
+		{
+			simulatedAdmitted.remove(memberId);
+			playerData.remove(memberId);
+			fire();
+			return;
+		}
+		admitted.remove(memberId);
+		sendCommand(MemberCommand.Action.KICK, memberId);
+		stateDirty = true;
+		fire();
+	}
+
+	public void reject(long memberId)
+	{
+		if (!hosting)
+		{
+			return;
+		}
+		if (simulated.remove(memberId) != null)
+		{
+			simulatedAdmitted.remove(memberId);
+			playerData.remove(memberId);
+			fire();
+			return;
+		}
+		sendCommand(MemberCommand.Action.REJECT, memberId);
+		fire();
+	}
+
+	/**
+	 * Inject a fake pending applicant for host-side testing. Lives only in this
+	 * client (negative member id, never broadcast); Admit/Decline/Kick treat it
+	 * like a real one. @return the synthetic member id.
+	 */
+	public long addSimulatedApplicant(PlayerUpdate data)
+	{
+		long id = simSeq--;
+		data.setMemberId(id);
+		simulated.put(id, data);
+		playerData.put(id, data);
+		fire();
+		return id;
+	}
+
+	public void setLocked(boolean locked)
+	{
+		if (!hosting)
+		{
+			return;
+		}
+		this.locked = locked;
+		stateDirty = true;
+		fire();
+	}
+
+	public boolean isLocked()
+	{
+		return hosting ? locked : (lastState != null && lastState.isLocked());
+	}
+
+	private void sendCommand(MemberCommand.Action action, long targetMemberId)
+	{
+		MemberCommand command = new MemberCommand();
+		command.setAction(action);
+		command.setTargetMemberId(targetMemberId);
+		partyService.send(command);
+	}
+
+	// ---- per-tick flushing (must be called from the client thread) -----------
+
+	/**
+	 * Push any pending host state and our own live snapshot. Reads client item
+	 * containers, so call only on the client thread (e.g. from {@code GameTick}).
+	 */
+	public void tick()
+	{
+		if (!isConnected())
+		{
+			return;
+		}
+		flushState();
+		if (localDirty)
+		{
+			PlayerUpdate update = LocalPlayerSync.snapshot(client);
+			if (update != null)
+			{
+				broadcastLocal(update);
+			}
+		}
+	}
+
+	/** Host: rebroadcast the authoritative state if it changed and we're connected. */
+	private void flushState()
+	{
+		if (hosting && stateDirty && isLocalReady())
+		{
+			partyService.send(buildState());
+			stateDirty = false;
+		}
+	}
+
+	/** Broadcast our own snapshot; clears the dirty flag only once actually sent. */
+	private void broadcastLocal(PlayerUpdate update)
+	{
+		PartyMember local = partyService.getLocalMember();
+		if (local == null)
+		{
+			return; // not connected yet — retry next tick
+		}
+		update.setMemberId(local.getMemberId());
+		playerData.put(local.getMemberId(), update);
+		partyService.send(update);
+		localDirty = false;
+		fire();
+	}
+
+	public void markLocalDirty()
+	{
+		localDirty = true;
+	}
+
+	private PartyStateMessage buildState()
+	{
+		PartyStateMessage state = new PartyStateMessage();
+		long localId = localId();
+		state.setHostMemberId(localId);
+		state.setHostName(hostName);
+		state.setCapacity(capacity);
+		state.setLocked(locked);
+
+		List<RosterEntry> roster = new ArrayList<>();
+		roster.add(new RosterEntry(localId, hostName));
+		for (Map.Entry<Long, String> e : admitted.entrySet())
+		{
+			roster.add(new RosterEntry(e.getKey(), e.getValue()));
+		}
+		state.setRoster(roster);
+		return state;
+	}
+
+	// ---- inbound message handlers (called from the plugin's @Subscribe) ------
+
+	public void onPlayerUpdate(PlayerUpdate update)
+	{
+		playerData.put(update.getMemberId(), update);
+		fire();
+	}
+
+	public void onPartyState(PartyStateMessage state)
+	{
+		if (hosting)
+		{
+			return; // we are the authority; ignore others claiming to be host
+		}
+		if (state.isClosed())
+		{
+			end();
+			return;
+		}
+		lastState = state;
+		fire();
+	}
+
+	public void onMemberCommand(MemberCommand command)
+	{
+		if (command.getTargetMemberId() == localId() && localId() != 0)
+		{
+			end();
+		}
+	}
+
+	public void onPeerJoined(long memberId)
+	{
+		// Re-announce ourselves so the newcomer sees our data, and (if host) push
+		// the current state so they learn who's admitted.
+		localDirty = true;
+		if (hosting)
+		{
+			stateDirty = true;
+		}
+		fire();
+	}
+
+	public void onPeerLeft(long memberId)
+	{
+		playerData.remove(memberId);
+		if (hosting && admitted.remove(memberId) != null)
+		{
+			stateDirty = true;
+		}
+		fire();
+	}
+
+	/** Our membership ended externally (kicked, or host closed). */
+	private void end()
+	{
+		partyService.changeParty(null);
+		reset();
+		Runnable cb = onEnded;
+		if (cb != null)
+		{
+			cb.run();
+		}
+		fire();
+	}
+
+	// ---- roster view for the UI ----------------------------------------------
+
+	public List<RosterMember> roster()
+	{
+		long hostId;
+		Set<Long> admittedIds = new HashSet<>();
+		if (hosting)
+		{
+			hostId = localId();
+			admittedIds.addAll(admitted.keySet());
+		}
+		else if (lastState != null)
+		{
+			hostId = lastState.getHostMemberId();
+			for (RosterEntry entry : lastState.getRoster())
+			{
+				admittedIds.add(entry.getMemberId());
+			}
+		}
+		else
+		{
+			hostId = 0;
+		}
+
+		long localId = localId();
+		List<RosterMember> out = new ArrayList<>();
+		for (PartyMember member : partyService.getMembers())
+		{
+			long id = member.getMemberId();
+			Status status = id == hostId ? Status.HOST
+				: admittedIds.contains(id) ? Status.MEMBER : Status.PENDING;
+			PlayerUpdate data = playerData.get(id);
+			String name = data != null && data.getName() != null ? data.getName() : member.getDisplayName();
+			out.add(new RosterMember(id, name, status, data, id == localId));
+		}
+		// Locally-injected fake applicants (host testing) — never on the network.
+		for (Map.Entry<Long, PlayerUpdate> entry : simulated.entrySet())
+		{
+			long id = entry.getKey();
+			Status status = simulatedAdmitted.contains(id) ? Status.MEMBER : Status.PENDING;
+			out.add(new RosterMember(id, entry.getValue().getName(), status, entry.getValue(), false));
+		}
+		out.sort(Comparator.comparingInt((RosterMember m) -> m.getStatus().ordinal())
+			.thenComparing(RosterMember::getName, Comparator.nullsLast(String::compareToIgnoreCase)));
+		return out;
+	}
+
+	private long localId()
+	{
+		PartyMember local = partyService.getLocalMember();
+		return local == null ? 0 : local.getMemberId();
+	}
+
+	private boolean isLocalReady()
+	{
+		return partyService.getLocalMember() != null;
+	}
+
+	private void fire()
+	{
+		for (Runnable listener : listeners)
+		{
+			listener.run();
+		}
+	}
+}

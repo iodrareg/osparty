@@ -1,0 +1,65 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenLocal()
+    maven {
+        url = 'https://repo.runelite.net'
+    }
+    mavenCentral()
+}
+
+def runeLiteVersion = 'latest.release'
+
+dependencies {
+    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+
+    compileOnly 'org.projectlombok:lombok:1.18.46'
+    annotationProcessor 'org.projectlombok:lombok:1.18.46'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+    testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+}
+
+group = 'net.osparty'
+version = '1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+// RuneLite's ExternalPluginManager.loadBuiltin() requires assertions enabled,
+// and the client touches JDK-internal APIs that JDK 9+ encapsulates. These
+// flags keep OSPartyPluginTest.main() launchable on a modern JDK instead of
+// the canonical JDK 11. On macOS it also needs Apple's com.apple.eawt
+// (full-screen support), which java.desktop hides from unnamed modules.
+tasks.withType(JavaExec).configureEach {
+    jvmArgs '-ea'
+    jvmArgs '--add-opens=java.desktop/java.awt=ALL-UNNAMED'
+    jvmArgs '--add-opens=java.desktop/sun.awt=ALL-UNNAMED'
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+    if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
+        jvmArgs '--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED'
+    }
+}
+
+tasks.withType(AbstractArchiveTask) {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+// Convenience launcher: ./gradlew runClient
+// (IntelliJ's "run main" delegation works too and picks up the JVM args above.)
+tasks.register('runClient', JavaExec) {
+    group = 'application'
+    description = 'Runs the RuneLite client with the OSParty plugin loaded'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'net.osparty.OSPartyPluginTest'
+}
