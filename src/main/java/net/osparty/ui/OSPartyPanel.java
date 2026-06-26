@@ -57,7 +57,7 @@ public class OSPartyPanel extends PluginPanel
 			friendsChatOwnerSupplier, worldSupplier, partyState, liveParty, accountTypeSupplier,
 			mapRegionsSupplier);
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
-			accountTypeSupplier);
+			accountTypeSupplier, mapRegionsSupplier);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,
 			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService, killcountService,
 			skillIconManager, worldSupplier, worldHopper, friendsChatOwnerSupplier);

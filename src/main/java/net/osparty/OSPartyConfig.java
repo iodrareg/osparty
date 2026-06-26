@@ -28,7 +28,7 @@ public interface OSPartyConfig extends Config
 	)
 	default int defaultCapacity()
 	{
-		return 2;
+		return 3;
 	}
 
 	@ConfigItem(

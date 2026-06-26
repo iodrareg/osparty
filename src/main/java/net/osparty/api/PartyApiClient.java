@@ -70,13 +70,17 @@ public class PartyApiClient implements PartyService
 	@Override
 	public void searchParties(Activity activity, String player, Consumer<List<Party>> onSuccess, Consumer<Throwable> onError)
 	{
-		HttpUrl url = baseUrl()
+		HttpUrl.Builder url = baseUrl()
 			.addPathSegment("parties")
-			.addQueryParameter("activity", activity.getId())
-			.addQueryParameter("player", nullToEmpty(player))
-			.build();
+			.addQueryParameter("player", nullToEmpty(player));
+		// A null activity fetches every open party (the API treats the filter as
+		// optional); the Search tab then filters client-side by the checked set.
+		if (activity != null)
+		{
+			url.addQueryParameter("activity", activity.getId());
+		}
 
-		Request request = new Request.Builder().url(url).get().build();
+		Request request = new Request.Builder().url(url.build()).get().build();
 		enqueue(request, PARTY_LIST_TYPE, onSuccess, onError);
 	}
 

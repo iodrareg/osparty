@@ -251,6 +251,14 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		// The local player (and its name) is usually not yet available at the
 		// LOGGED_IN event, so capturing it here is unreliable; we instead read
 		// it each tick (see onGameTick) and only clear it on logout here.
+		// On a real logout (not a world hop), tell the party we've gone offline so
+		// our presence dot clears immediately instead of waiting to go stale.
+		if (event.getGameState() == GameState.LOGIN_SCREEN && playerName != null
+			&& liveParty.isConnected())
+		{
+			liveParty.broadcastOffline(playerName);
+		}
+
 		if (event.getGameState() == GameState.LOGIN_SCREEN
 			|| event.getGameState() == GameState.HOPPING)
 		{

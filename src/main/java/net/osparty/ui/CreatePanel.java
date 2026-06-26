@@ -16,10 +16,12 @@ import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
@@ -27,6 +29,9 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+import javax.swing.event.AncestorEvent;
+import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
@@ -44,8 +49,13 @@ class CreatePanel extends JPanel
 	private final PartyState partyState;
 	private final LiveParty liveParty;
 	private final Supplier<AccountType> accountTypeSupplier;
+	private final Supplier<int[]> mapRegionsSupplier;
 
 	private final JComboBox<Activity> activityDropdown = new JComboBox<>(Activity.values());
+	/** The activity we're currently standing near (suggested at the top of the list). */
+	private Activity recommended;
+	/** True while we're programmatically reordering the dropdown. */
+	private boolean rebuildingDropdown;
 	private final JComboBox<LootRule> lootDropdown = new JComboBox<>(LootRule.values());
 	private final JSpinner capacitySpinner;
 	private final JTextField worldField = new JTextField();
@@ -61,13 +71,15 @@ class CreatePanel extends JPanel
 	private JPanel hardKcField;
 
 	CreatePanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
-		PartyState partyState, LiveParty liveParty, Supplier<AccountType> accountTypeSupplier)
+		PartyState partyState, LiveParty liveParty, Supplier<AccountType> accountTypeSupplier,
+		Supplier<int[]> mapRegionsSupplier)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
 		this.partyState = partyState;
 		this.liveParty = liveParty;
 		this.accountTypeSupplier = accountTypeSupplier;
+		this.mapRegionsSupplier = mapRegionsSupplier;
 
 		int defaultCapacity = Math.max(1, config.defaultCapacity());
 		this.capacitySpinner = new JSpinner(new SpinnerNumberModel(defaultCapacity, 1, 100, 1));
@@ -119,7 +131,77 @@ class CreatePanel extends JPanel
 		// Push the form to the top so fields keep their natural height.
 		add(Box.createVerticalGlue());
 
-		activityDropdown.addActionListener(e -> applyActivityBounds());
+		activityDropdown.setRenderer(new ActivityRenderer());
+		activityDropdown.addActionListener(e -> {
+			if (!rebuildingDropdown)
+			{
+				applyActivityBounds();
+			}
+		});
+		applyActivityBounds();
+
+		// Suggest the activity we're standing near when the tab opens, and re-check
+		// every 10s while it's visible.
+		addAncestorListener(new AncestorListener()
+		{
+			@Override
+			public void ancestorAdded(AncestorEvent event)
+			{
+				applyRecommendation();
+			}
+
+			@Override
+			public void ancestorRemoved(AncestorEvent event)
+			{
+			}
+
+			@Override
+			public void ancestorMoved(AncestorEvent event)
+			{
+			}
+		});
+		new Timer(10_000, e -> {
+			if (isShowing())
+			{
+				applyRecommendation();
+			}
+		}).start();
+	}
+
+	/**
+	 * If the player is standing near an activity, float it to the top of the
+	 * dropdown and select it. No-op when the nearby activity hasn't changed, so it
+	 * doesn't fight a manual selection.
+	 */
+	private void applyRecommendation()
+	{
+		Activity near = Activity.nearby(mapRegionsSupplier.get());
+		if (near == recommended)
+		{
+			return;
+		}
+		recommended = near;
+
+		Activity current = (Activity) activityDropdown.getSelectedItem();
+		rebuildingDropdown = true;
+		activityDropdown.removeAllItems();
+		if (near != null)
+		{
+			activityDropdown.addItem(near);
+		}
+		for (Activity activity : Activity.values())
+		{
+			if (activity != near)
+			{
+				activityDropdown.addItem(activity);
+			}
+		}
+		Activity select = near != null ? near : current;
+		if (select != null)
+		{
+			activityDropdown.setSelectedItem(select);
+		}
+		rebuildingDropdown = false;
 		applyActivityBounds();
 	}
 
@@ -291,5 +373,24 @@ class CreatePanel extends JPanel
 	private void setStatus(String text)
 	{
 		statusLabel.setText(text);
+	}
+
+	/** Dropdown renderer that appends "(nearby)" to the recommended activity. */
+	private class ActivityRenderer extends DefaultListCellRenderer
+	{
+		@Override
+		public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+			boolean isSelected, boolean cellHasFocus)
+		{
+			super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+			if (value instanceof Activity)
+			{
+				Activity activity = (Activity) value;
+				setText(activity == recommended
+					? activity.getDisplayName() + "  (nearby)"
+					: activity.getDisplayName());
+			}
+			return this;
+		}
 	}
 }

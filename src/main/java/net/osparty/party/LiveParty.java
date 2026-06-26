@@ -437,6 +437,28 @@ public class LiveParty
 		localDirty = true;
 	}
 
+	/**
+	 * Tell peers we've gone offline (e.g. logged out) by broadcasting a world-0
+	 * update, so our dot clears immediately rather than waiting to go stale. We'll
+	 * re-send full data once we're back in-game.
+	 */
+	public void broadcastOffline(String name)
+	{
+		PartyMember local = partyService.getLocalMember();
+		if (local == null)
+		{
+			return;
+		}
+		PlayerUpdate update = new PlayerUpdate();
+		update.setName(name);
+		update.setWorld(0);
+		update.setMemberId(local.getMemberId());
+		playerData.put(local.getMemberId(), update);
+		partyService.send(update);
+		localDirty = true;
+		fire();
+	}
+
 	private PartyStateMessage buildState()
 	{
 		PartyStateMessage state = new PartyStateMessage();
@@ -576,7 +598,10 @@ public class LiveParty
 				: admittedIds.contains(id) ? Status.MEMBER : Status.PENDING;
 			PlayerUpdate data = playerData.get(id);
 			String name = data != null && data.getName() != null ? data.getName() : member.getDisplayName();
-			boolean online = id == localId || isRecent(now, id);
+			// Online = us, or a peer we've heard from recently who reports being
+			// logged in (world > 0). A logout broadcasts world 0; a crash/close just
+			// goes stale. Either way the green dot clears.
+			boolean online = id == localId || (isRecent(now, id) && data != null && data.getWorld() > 0);
 			out.add(new RosterMember(id, name, status, data, id == localId, online));
 		}
 		out.sort(Comparator.comparingInt((RosterMember m) -> m.getStatus().ordinal())

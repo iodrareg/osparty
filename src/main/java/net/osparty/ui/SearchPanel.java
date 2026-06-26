@@ -7,6 +7,7 @@ import net.osparty.model.LootRule;
 import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -16,25 +17,27 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LayoutManager;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.event.AncestorEvent;
@@ -66,11 +69,14 @@ class SearchPanel extends JPanel
 	private final Supplier<AccountType> accountTypeSupplier;
 	private final Supplier<int[]> mapRegionsSupplier;
 
-	private final JComboBox<Activity> activityDropdown = new JComboBox<>(Activity.values());
-	/** The activity we're currently standing near (suggested at the top of the list). */
+	/** Checkbox list of activities to include; all selected by default. */
+	private final JPanel activityListPanel = new JPanel();
+	private final Set<Activity> selectedActivities = EnumSet.allOf(Activity.class);
+	/** The activity we're currently standing near (floated to the top, pre-checked). */
 	private Activity recommended;
-	/** True while we're programmatically rebuilding the dropdown (suppress search). */
-	private boolean rebuildingDropdown;
+	/** Free-text filter over host name / description / activity. */
+	private final JTextField textField = new JTextField();
+
 	private final JComboBox<String> lootFilter = new JComboBox<>(new String[]{"Any loot", "FFA", "Split"});
 	private final JCheckBox ironmanFilter = new JCheckBox("Ironman parties only");
 	private final JTextField codeField = new JTextField();
@@ -80,16 +86,9 @@ class SearchPanel extends JPanel
 
 	/** Last raw search results, kept so the filters can re-apply without re-querying. */
 	private List<Party> lastResults;
-	private Activity lastActivity;
 	/** Signature of the currently-rendered cards, to skip rebuilds when nothing changed. */
 	private String renderedSignature;
 	private Timer autoRefreshTimer;
-
-	// Application banner (visible only while applied to a party as a member).
-	private final JPanel applicationPanel = new JPanel();
-	private final JLabel applicationHostLabel = new JLabel();
-	private final JLabel friendsChatLabel = new JLabel();
-	private final JLabel worldLabel = new JLabel();
 
 	/** Party id -> epoch millis when its cooldown expires. */
 	private final Map<String, Long> cooldownExpiry = new HashMap<>();
@@ -120,10 +119,11 @@ class SearchPanel extends JPanel
 		JPanel north = new JPanel();
 		north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
 		north.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		north.add(buildActivityFilter());
+		north.add(buildTextFilter());
 		north.add(buildControls());
 		north.add(buildFilters());
 		north.add(buildJoinByCode());
-		north.add(buildApplicationPanel());
 		add(north, BorderLayout.NORTH);
 
 		resultsPanel.setLayout(new BoxLayout(resultsPanel, BoxLayout.Y_AXIS));
@@ -146,23 +146,11 @@ class SearchPanel extends JPanel
 		statusLabel.setFont(FontManager.getRunescapeSmallFont());
 		add(statusLabel, BorderLayout.SOUTH);
 
-		// Mark the nearby activity with a "(nearby)" suffix in the dropdown.
-		activityDropdown.setRenderer(new ActivityRenderer());
-
-		searchButton.setToolTipText("Refresh the list for the selected activity");
+		searchButton.setToolTipText("Refresh the list of open parties");
 		searchButton.addActionListener(e -> search());
 
-		// Selecting a different activity searches it immediately (but not while we're
-		// programmatically reordering the list to surface a nearby activity).
-		activityDropdown.addActionListener(e -> {
-			if (!rebuildingDropdown)
-			{
-				search();
-			}
-		});
-
-		// Auto-refresh the selected activity every 10s while the tab is visible, and
-		// re-check whether we've moved near a different activity.
+		// Auto-refresh every 10s while the tab is visible, and re-check whether we've
+		// moved near a different activity.
 		autoRefreshTimer = new Timer(10_000, e -> {
 			if (isShowing())
 			{
@@ -196,37 +184,146 @@ class SearchPanel extends JPanel
 		// React to party changes made elsewhere (e.g. leaving from the Current tab).
 		partyState.addListener(() -> {
 			updateAllButtons();
-			updateApplicationBanner();
 			maybeStartTimer();
 		});
-		updateApplicationBanner();
 	}
 
 	private JPanel buildControls()
 	{
-		JPanel controls = new JPanel(new BorderLayout(0, 6))
+		JPanel controls = cappedRow(new BorderLayout(0, 6));
+		controls.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+		searchButton.setFocusPainted(false);
+		controls.add(searchButton, BorderLayout.CENTER);
+		return controls;
+	}
+
+	/** The activity multiselect: a checkbox per activity (all checked by default). */
+	private JPanel buildActivityFilter()
+	{
+		JPanel panel = cappedRow(new BorderLayout(0, 4));
+
+		JLabel label = new JLabel("Activities");
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		panel.add(label, BorderLayout.NORTH);
+
+		activityListPanel.setLayout(new BoxLayout(activityListPanel, BoxLayout.Y_AXIS));
+		activityListPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		rebuildActivityList();
+
+		JScrollPane scroll = new JScrollPane(activityListPanel,
+			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		scroll.setBorder(BorderFactory.createEmptyBorder());
+		scroll.getVerticalScrollBar().setUnitIncrement(16);
+		// Show ~6 rows; the rest scroll.
+		scroll.setPreferredSize(new Dimension(10, 120));
+		panel.add(scroll, BorderLayout.CENTER);
+		return panel;
+	}
+
+	/** A free-text filter over host name, description and activity. */
+	private JPanel buildTextFilter()
+	{
+		JPanel panel = cappedRow(new BorderLayout(0, 4));
+		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+
+		JLabel label = new JLabel("Search text");
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setFont(FontManager.getRunescapeSmallFont());
+
+		textField.setToolTipText("Filter by host, description or activity");
+		textField.getDocument().addDocumentListener(new DocumentListener()
 		{
 			@Override
-			public Dimension getMaximumSize()
+			public void insertUpdate(DocumentEvent e)
 			{
-				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+				reapplyFilters();
 			}
-		};
-		controls.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		// Match the other north children's alignment — a mixed BoxLayout alignmentX
-		// pushes the LEFT-aligned panels (filters, join row) to the right.
-		controls.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-		JLabel label = new JLabel("Activity");
-		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		controls.add(label, BorderLayout.NORTH);
+			@Override
+			public void removeUpdate(DocumentEvent e)
+			{
+				reapplyFilters();
+			}
 
-		controls.add(activityDropdown, BorderLayout.CENTER);
+			@Override
+			public void changedUpdate(DocumentEvent e)
+			{
+				reapplyFilters();
+			}
+		});
 
-		searchButton.setFocusPainted(false);
-		controls.add(searchButton, BorderLayout.SOUTH);
+		panel.add(label, BorderLayout.NORTH);
+		panel.add(textField, BorderLayout.CENTER);
+		return panel;
+	}
 
-		return controls;
+	/** Rebuild the checkbox list, recommended activity first and pre-checked. */
+	private void rebuildActivityList()
+	{
+		activityListPanel.removeAll();
+		for (Activity activity : orderedActivities())
+		{
+			boolean nearby = activity == recommended;
+			JCheckBox box = new JCheckBox(activity.getDisplayName() + (nearby ? "  (nearby)" : ""));
+			box.setSelected(selectedActivities.contains(activity));
+			box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			box.setForeground(nearby ? ColorScheme.BRAND_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
+			box.setFont(FontManager.getRunescapeSmallFont());
+			box.setFocusPainted(false);
+			box.setAlignmentX(Component.LEFT_ALIGNMENT);
+			box.addActionListener(e -> {
+				if (box.isSelected())
+				{
+					selectedActivities.add(activity);
+				}
+				else
+				{
+					selectedActivities.remove(activity);
+				}
+				reapplyFilters();
+			});
+			activityListPanel.add(box);
+		}
+		activityListPanel.revalidate();
+		activityListPanel.repaint();
+	}
+
+	/** Activities with the nearby one (if any) floated to the top. */
+	private List<Activity> orderedActivities()
+	{
+		List<Activity> ordered = new ArrayList<>();
+		if (recommended != null)
+		{
+			ordered.add(recommended);
+		}
+		for (Activity activity : Activity.values())
+		{
+			if (activity != recommended)
+			{
+				ordered.add(activity);
+			}
+		}
+		return ordered;
+	}
+
+	/**
+	 * If the player is standing near an activity, float it to the top of the list
+	 * and make sure it's checked. No-op when the nearby activity hasn't changed.
+	 */
+	private void applyRecommendation()
+	{
+		Activity near = Activity.nearby(mapRegionsSupplier.get());
+		if (near == recommended)
+		{
+			return;
+		}
+		recommended = near;
+		if (near != null)
+		{
+			selectedActivities.add(near);
+		}
+		rebuildActivityList();
+		reapplyFilters();
 	}
 
 	private JPanel buildFilters()
@@ -293,9 +390,9 @@ class SearchPanel extends JPanel
 
 	private void reapplyFilters()
 	{
-		if (lastResults != null && lastActivity != null)
+		if (lastResults != null)
 		{
-			showResults(lastActivity, lastResults);
+			showResults(lastResults);
 		}
 	}
 
@@ -376,103 +473,36 @@ class SearchPanel extends JPanel
 		return tags.isEmpty() ? null : String.join(", ", tags);
 	}
 
-	private JPanel buildApplicationPanel()
-	{
-		applicationPanel.setLayout(new GridLayout(0, 1));
-		applicationPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		applicationPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-		applicationPanel.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createEmptyBorder(8, 0, 0, 0),
-			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
-		applicationPanel.setVisible(false);
-
-		applicationHostLabel.setForeground(ColorScheme.BRAND_ORANGE);
-
-		friendsChatLabel.setFont(FontManager.getRunescapeSmallFont());
-		worldLabel.setFont(FontManager.getRunescapeSmallFont());
-
-		applicationPanel.add(applicationHostLabel);
-		applicationPanel.add(friendsChatLabel);
-		applicationPanel.add(worldLabel);
-		return applicationPanel;
-	}
-
-	/**
-	 * If the player is standing near an activity, float it to the top of the
-	 * dropdown and select it. No-op when the nearby activity hasn't changed, so it
-	 * doesn't fight the user's manual selection.
-	 */
-	private void applyRecommendation()
-	{
-		Activity near = Activity.nearby(mapRegionsSupplier.get());
-		if (near == recommended)
-		{
-			return;
-		}
-		recommended = near;
-		rebuildDropdown(near);
-	}
-
-	/** Reorder the dropdown so {@code near} (if any) is first; keep the rest in order. */
-	private void rebuildDropdown(Activity near)
-	{
-		Activity current = (Activity) activityDropdown.getSelectedItem();
-
-		rebuildingDropdown = true;
-		activityDropdown.removeAllItems();
-		if (near != null)
-		{
-			activityDropdown.addItem(near);
-		}
-		for (Activity activity : Activity.values())
-		{
-			if (activity != near)
-			{
-				activityDropdown.addItem(activity);
-			}
-		}
-		// Arriving at an activity selects it; otherwise keep the prior choice.
-		Activity select = near != null ? near : current;
-		if (select != null)
-		{
-			activityDropdown.setSelectedItem(select);
-		}
-		rebuildingDropdown = false;
-
-		search();
-	}
-
 	private void search()
 	{
 		String player = playerNameSupplier.get();
-		Activity activity = (Activity) activityDropdown.getSelectedItem();
-		if (activity == null)
-		{
-			return;
-		}
-
-		// No pre-clear: results stay put until the new ones arrive, so the periodic
-		// auto-refresh doesn't flicker.
-		partyService.searchParties(activity, player,
-			parties -> SwingUtilities.invokeLater(() -> showResults(activity, parties)),
+		// Fetch every open party; we filter client-side by the checked activities,
+		// loot, ironman and free text. No pre-clear, so refreshes don't flicker.
+		partyService.searchParties(null, player,
+			parties -> SwingUtilities.invokeLater(() -> showResults(parties)),
 			error -> SwingUtilities.invokeLater(() -> setStatus("Refresh failed: " + error.getMessage())));
 	}
 
-	private void showResults(Activity activity, List<Party> parties)
+	private void showResults(List<Party> parties)
 	{
-		lastActivity = activity;
 		lastResults = parties;
 
 		LootRule wantLoot = lootFilterValue();
 		boolean ironOnly = ironmanFilter.isSelected();
+		String text = textField.getText().trim().toLowerCase();
 
-		// Show only joinable, filter-matching parties (full ones are hidden).
+		// Show only joinable parties matching every active filter (full ones hidden).
 		List<Party> visible = new ArrayList<>();
 		if (parties != null)
 		{
 			for (Party party : parties)
 			{
 				if (party.isFull())
+				{
+					continue;
+				}
+				Activity act = Activity.fromId(party.getActivity());
+				if (act == null || !selectedActivities.contains(act))
 				{
 					continue;
 				}
@@ -484,12 +514,16 @@ class SearchPanel extends JPanel
 				{
 					continue;
 				}
+				if (!text.isEmpty() && !matchesText(party, act, text))
+				{
+					continue;
+				}
 				visible.add(party);
 			}
 		}
 
-		// Skip the rebuild (and its flicker) when the visible set is unchanged.
-		String signature = activity.getId() + "|" + signatureOf(visible);
+		// Skip the rebuild (and its flicker) when nothing rendered would change.
+		String signature = selectedSignature() + "|" + text + "|" + signatureOf(visible);
 		if (signature.equals(renderedSignature))
 		{
 			return;
@@ -502,7 +536,7 @@ class SearchPanel extends JPanel
 
 		if (visible.isEmpty())
 		{
-			setStatus("No open " + activity.getDisplayName() + " parties.");
+			setStatus("No open parties match your filters.");
 		}
 		else
 		{
@@ -510,7 +544,7 @@ class SearchPanel extends JPanel
 			for (Party party : visible)
 			{
 				partiesById.put(party.getId(), party);
-				resultsPanel.add(buildPartyCard(activity, party));
+				resultsPanel.add(buildPartyCard(Activity.fromId(party.getActivity()), party));
 				resultsPanel.add(Box.createVerticalStrut(6));
 			}
 			updateAllButtons();
@@ -520,16 +554,74 @@ class SearchPanel extends JPanel
 		resultsPanel.repaint();
 	}
 
-	/** A stable signature of the visible parties so unchanged refreshes can no-op. */
+	/** True if the free-text query matches the host, description or activity name. */
+	private static boolean matchesText(Party party, Activity activity, String lowerQuery)
+	{
+		if (contains(party.getHost(), lowerQuery) || contains(party.getDescription(), lowerQuery))
+		{
+			return true;
+		}
+		return activity != null && contains(activity.getDisplayName(), lowerQuery);
+	}
+
+	private static boolean contains(String haystack, String lowerNeedle)
+	{
+		return haystack != null && haystack.toLowerCase().contains(lowerNeedle);
+	}
+
+	/** A signature of the checked-activity set so toggling it triggers a rebuild. */
+	private String selectedSignature()
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Activity activity : Activity.values())
+		{
+			if (selectedActivities.contains(activity))
+			{
+				sb.append(activity.getId()).append(',');
+			}
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * A stable signature of the visible parties so unchanged refreshes can no-op.
+	 * Includes each party's age in minutes so the "searching Xm" labels stay current.
+	 */
 	private static String signatureOf(List<Party> parties)
 	{
+		long now = System.currentTimeMillis();
 		StringBuilder sb = new StringBuilder();
 		for (Party party : parties)
 		{
 			sb.append(party.getId()).append(':').append(party.getSize())
-				.append('/').append(party.getCapacity()).append(';');
+				.append('/').append(party.getCapacity())
+				.append('@').append(ageMinutes(now, party.getCreatedAt())).append(';');
 		}
 		return sb.toString();
+	}
+
+	private static long ageMinutes(long now, long createdAt)
+	{
+		return createdAt <= 0 ? -1 : Math.max(0, (now - createdAt) / 60_000);
+	}
+
+	/** Human-readable age, e.g. "just now", "12m", "1h 5m"; null when unknown. */
+	private static String formatAge(long createdAt)
+	{
+		if (createdAt <= 0)
+		{
+			return null;
+		}
+		long mins = ageMinutes(System.currentTimeMillis(), createdAt);
+		if (mins < 1)
+		{
+			return "just now";
+		}
+		if (mins < 60)
+		{
+			return mins + "m";
+		}
+		return (mins / 60) + "h " + (mins % 60) + "m";
 	}
 
 	private JPanel buildPartyCard(Activity activity, Party party)
@@ -551,8 +643,13 @@ class SearchPanel extends JPanel
 		JPanel info = new JPanel(new GridLayout(0, 1));
 		info.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
+		// Activity name first, since the list now mixes activities.
+		JLabel activityLabel = new JLabel(activity != null ? activity.getDisplayName() : party.getActivity());
+		activityLabel.setForeground(Color.WHITE);
+
 		JLabel host = new JLabel(party.getHost() == null ? "Unknown host" : party.getHost());
 		host.setForeground(ColorScheme.BRAND_ORANGE);
+		host.setFont(FontManager.getRunescapeSmallFont());
 		ImageIcon hostIcon = AccountIcons.forType(AccountTypes.fromName(party.getHostAccountType()));
 		if (hostIcon != null)
 		{
@@ -568,10 +665,16 @@ class SearchPanel extends JPanel
 		{
 			sub.append(", W").append(party.getWorld());
 		}
+		String age = formatAge(party.getCreatedAt());
+		if (age != null)
+		{
+			sub.append(", searching ").append(age);
+		}
 		JLabel meta = new JLabel(sub.toString());
 		meta.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		meta.setFont(FontManager.getRunescapeSmallFont());
 
+		info.add(activityLabel);
 		info.add(host);
 		info.add(meta);
 
@@ -641,7 +744,7 @@ class SearchPanel extends JPanel
 			req.append(party.getMinKillCount()).append(" KC");
 			any = true;
 		}
-		if (activity.hasHardMode() && party.getMinHardModeKillCount() > 0)
+		if (activity != null && activity.hasHardMode() && party.getMinHardModeKillCount() > 0)
 		{
 			if (any)
 			{
@@ -810,70 +913,9 @@ class SearchPanel extends JPanel
 		button.setToolTipText(partyState.isInParty() ? "Applying will leave your current party" : null);
 	}
 
-	/**
-	 * Refresh the "in friends chat / same world as host" banner from the
-	 * (read-only) live client state. Shown only while applied to a party.
-	 */
-	private void updateApplicationBanner()
-	{
-		if (!isMemberInParty())
-		{
-			applicationPanel.setVisible(false);
-			return;
-		}
-
-		Party party = partyState.getCurrentParty();
-		String hostName = party.getHost();
-		applicationHostLabel.setText("Applied to " + hostName);
-
-		String fcOwner = friendsChatOwnerSupplier.get();
-		boolean inFc = fcOwner != null && !fcOwner.isEmpty()
-			&& normalize(fcOwner).equalsIgnoreCase(normalize(hostName));
-		friendsChatLabel.setText(hostName + "'s friends chat: " + (inFc ? "joined" : "not joined"));
-		friendsChatLabel.setForeground(inFc
-			? ColorScheme.PROGRESS_COMPLETE_COLOR
-			: ColorScheme.PROGRESS_ERROR_COLOR);
-
-		int myWorld = worldSupplier.getAsInt();
-		int hostWorld = parseWorld(party.getWorld());
-		if (hostWorld <= 0)
-		{
-			worldLabel.setText("Host world unknown (you are on W" + myWorld + ")");
-			worldLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		}
-		else
-		{
-			boolean sameWorld = myWorld == hostWorld;
-			worldLabel.setText("World: W" + myWorld + (sameWorld
-				? " (same as host)"
-				: " (host on W" + hostWorld + ")"));
-			worldLabel.setForeground(sameWorld
-				? ColorScheme.PROGRESS_COMPLETE_COLOR
-				: ColorScheme.PROGRESS_ERROR_COLOR);
-		}
-
-		applicationPanel.setVisible(true);
-	}
-
 	private boolean isMemberInParty()
 	{
 		return partyState.isInParty() && !partyState.isHost();
-	}
-
-	private static int parseWorld(String world)
-	{
-		if (world == null || world.isEmpty())
-		{
-			return 0;
-		}
-		try
-		{
-			return Integer.parseInt(world.trim());
-		}
-		catch (NumberFormatException e)
-		{
-			return 0;
-		}
 	}
 
 	/** Normalise a player name for comparison (RuneLite uses nbsp in names). */
@@ -913,7 +955,6 @@ class SearchPanel extends JPanel
 		{
 			uiTimer = new Timer(1000, e -> {
 				updateAllButtons();
-				updateApplicationBanner();
 				if (!hasActiveCooldowns() && !isMemberInParty())
 				{
 					uiTimer.stop();
@@ -942,24 +983,5 @@ class SearchPanel extends JPanel
 	private void setStatus(String text)
 	{
 		statusLabel.setText(text);
-	}
-
-	/** Dropdown renderer that appends "(nearby)" to the recommended activity. */
-	private class ActivityRenderer extends DefaultListCellRenderer
-	{
-		@Override
-		public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
-			boolean isSelected, boolean cellHasFocus)
-		{
-			super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-			if (value instanceof Activity)
-			{
-				Activity activity = (Activity) value;
-				setText(activity == recommended
-					? activity.getDisplayName() + "  (nearby)"
-					: activity.getDisplayName());
-			}
-			return this;
-		}
 	}
 }
