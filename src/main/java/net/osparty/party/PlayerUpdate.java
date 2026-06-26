@@ -46,4 +46,10 @@ public class PlayerUpdate extends PartyMemberMessage
 
 	/** Personal best (seconds) for the party's activity+team size; {@code -1} when unknown. */
 	private double pbSeconds = -1;
+
+	/** The world the member is currently logged in to; {@code 0} when unknown. */
+	private int world;
+
+	/** Owner (name) of the friends chat the member is in, or {@code null} when in none. */
+	private String friendsChatOwner;
 }

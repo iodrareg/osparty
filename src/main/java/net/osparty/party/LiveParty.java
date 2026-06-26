@@ -73,13 +73,6 @@ public class LiveParty
 	private final Map<Long, PlayerUpdate> playerData = new ConcurrentHashMap<>();
 	private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
-	// Locally-injected fake applicants for host-side testing. They live only in
-	// this client (negative ids, never broadcast) so the Admit/Decline flow can be
-	// exercised without a second account.
-	private final Map<Long, PlayerUpdate> simulated = new ConcurrentHashMap<>();
-	private final Set<Long> simulatedAdmitted = ConcurrentHashMap.newKeySet();
-	private long simSeq = -1L;
-
 	// Host-authoritative state (only meaningful while hosting).
 	private volatile boolean hosting;
 	private volatile String hostName;
@@ -101,6 +94,15 @@ public class LiveParty
 	private volatile boolean stateDirty; // host: roster/config changed, needs rebroadcast
 	private volatile boolean localDirty;  // self: our PlayerUpdate changed, needs rebroadcast
 
+	/**
+	 * Ticks since we last broadcast our own snapshot. RuneLite's party relay does
+	 * not replay history, so a peer who joins between our broadcasts would never
+	 * see our gear/stats. We re-mark ourselves dirty on a slow cadence so every
+	 * member's data converges even if a single on-join rebroadcast is missed.
+	 */
+	private int ticksSinceLocalBroadcast;
+	private static final int LOCAL_REBROADCAST_TICKS = 10; // ~6s at 0.6s/tick
+
 	/** Invoked (off-EDT) when our membership ends — host closed, or we were kicked. */
 	private volatile Runnable onEnded;
 
@@ -120,6 +122,7 @@ public class LiveParty
 		wsClient.registerMessage(PlayerUpdate.class);
 		wsClient.registerMessage(PartyStateMessage.class);
 		wsClient.registerMessage(MemberCommand.class);
+		wsClient.registerMessage(FcRequestMessage.class);
 	}
 
 	public void unregister()
@@ -127,6 +130,7 @@ public class LiveParty
 		wsClient.unregisterMessage(PlayerUpdate.class);
 		wsClient.unregisterMessage(PartyStateMessage.class);
 		wsClient.unregisterMessage(MemberCommand.class);
+		wsClient.unregisterMessage(FcRequestMessage.class);
 		reset();
 	}
 
@@ -205,10 +209,8 @@ public class LiveParty
 		locked = false;
 		admitted.clear();
 		playerData.clear();
-		simulated.clear();
-		simulatedAdmitted.clear();
 		leaving.clear();
-		simSeq = -1L;
+		ticksSinceLocalBroadcast = 0;
 		currentActivityId = null;
 		currentTeamSize = 0;
 		lastState = null;
@@ -236,7 +238,7 @@ public class LiveParty
 	/** @return true if another applicant can still be admitted (host + admitted < capacity). */
 	public boolean canAdmitMore()
 	{
-		return capacity <= 0 || admitted.size() + simulatedAdmitted.size() + 1 < capacity;
+		return capacity <= 0 || admitted.size() + 1 < capacity;
 	}
 
 	public boolean admit(long memberId, String name)
@@ -244,12 +246,6 @@ public class LiveParty
 		if (!hosting || !canAdmitMore())
 		{
 			return false;
-		}
-		if (simulated.containsKey(memberId))
-		{
-			simulatedAdmitted.add(memberId);
-			fire();
-			return true;
 		}
 		admitted.put(memberId, name);
 		stateDirty = true;
@@ -261,13 +257,6 @@ public class LiveParty
 	{
 		if (!hosting)
 		{
-			return;
-		}
-		if (simulated.remove(memberId) != null)
-		{
-			simulatedAdmitted.remove(memberId);
-			playerData.remove(memberId);
-			fire();
 			return;
 		}
 		admitted.remove(memberId);
@@ -283,31 +272,26 @@ public class LiveParty
 		{
 			return;
 		}
-		if (simulated.remove(memberId) != null)
-		{
-			simulatedAdmitted.remove(memberId);
-			playerData.remove(memberId);
-			fire();
-			return;
-		}
 		leaving.add(memberId);
 		sendCommand(MemberCommand.Action.REJECT, memberId);
 		fire();
 	}
 
 	/**
-	 * Inject a fake pending applicant for host-side testing. Lives only in this
-	 * client (negative member id, never broadcast); Admit/Decline/Kick treat it
-	 * like a real one. @return the synthetic member id.
+	 * Host: ask a specific member to join our friends chat. Delivered as a
+	 * targeted message the member's client shows as a brief in-game popup.
 	 */
-	public long addSimulatedApplicant(PlayerUpdate data)
+	public void requestFriendsChat(long targetMemberId, String friendsChat)
 	{
-		long id = simSeq--;
-		data.setMemberId(id);
-		simulated.put(id, data);
-		playerData.put(id, data);
-		fire();
-		return id;
+		if (!hosting)
+		{
+			return;
+		}
+		FcRequestMessage request = new FcRequestMessage();
+		request.setTargetMemberId(targetMemberId);
+		request.setHostName(hostName);
+		request.setFriendsChat(friendsChat);
+		partyService.send(request);
 	}
 
 	public void setLocked(boolean locked)
@@ -347,6 +331,12 @@ public class LiveParty
 			return;
 		}
 		flushState();
+		// Periodically re-announce ourselves so a peer who joined after our last
+		// broadcast still converges on our gear/stats (the relay has no replay).
+		if (++ticksSinceLocalBroadcast >= LOCAL_REBROADCAST_TICKS)
+		{
+			localDirty = true;
+		}
 		if (localDirty)
 		{
 			PlayerUpdate update = LocalPlayerSync.snapshot(client);
@@ -381,6 +371,7 @@ public class LiveParty
 		playerData.put(local.getMemberId(), update);
 		partyService.send(update);
 		localDirty = false;
+		ticksSinceLocalBroadcast = 0;
 		fire();
 	}
 
@@ -437,6 +428,13 @@ public class LiveParty
 		{
 			end();
 		}
+	}
+
+	/** @return true if {@code memberId} is our own connected member id. */
+	public boolean isForLocalMember(long memberId)
+	{
+		long id = localId();
+		return id != 0 && memberId == id;
 	}
 
 	public void onPeerJoined(long memberId)
@@ -513,13 +511,6 @@ public class LiveParty
 			PlayerUpdate data = playerData.get(id);
 			String name = data != null && data.getName() != null ? data.getName() : member.getDisplayName();
 			out.add(new RosterMember(id, name, status, data, id == localId));
-		}
-		// Locally-injected fake applicants (host testing) — never on the network.
-		for (Map.Entry<Long, PlayerUpdate> entry : simulated.entrySet())
-		{
-			long id = entry.getKey();
-			Status status = simulatedAdmitted.contains(id) ? Status.MEMBER : Status.PENDING;
-			out.add(new RosterMember(id, entry.getValue().getName(), status, entry.getValue(), false));
 		}
 		out.sort(Comparator.comparingInt((RosterMember m) -> m.getStatus().ordinal())
 			.thenComparing(RosterMember::getName, Comparator.nullsLast(String::compareToIgnoreCase)));

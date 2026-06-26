@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import net.runelite.api.Client;
 import net.runelite.api.EquipmentInventorySlot;
+import net.runelite.api.FriendsChatManager;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
@@ -54,6 +55,10 @@ final class LocalPlayerSync
 		{
 			update.setAccountType(client.getAccountType().name());
 		}
+		update.setWorld(client.getWorld());
+
+		FriendsChatManager fcm = client.getFriendsChatManager();
+		update.setFriendsChatOwner(fcm != null ? fcm.getOwner() : null);
 		return update;
 	}
 

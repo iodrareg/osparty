@@ -8,6 +8,7 @@ import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import net.osparty.runewatch.RuneWatchService;
 import java.awt.BorderLayout;
+import java.util.function.IntConsumer;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import net.runelite.api.vars.AccountType;
@@ -39,7 +40,7 @@ public class OSPartyPanel extends PluginPanel
 		HostApplicationHandler hostApplicationHandler, Supplier<String> friendsChatOwnerSupplier,
 		IntSupplier worldSupplier, ItemManager itemManager, LiveParty liveParty,
 		RuneWatchService runeWatchService, Supplier<AccountType> accountTypeSupplier,
-		KillcountService killcountService, SkillIconManager skillIconManager)
+		KillcountService killcountService, SkillIconManager skillIconManager, IntConsumer worldHopper)
 	{
 		super(false);
 
@@ -57,7 +58,7 @@ public class OSPartyPanel extends PluginPanel
 			accountTypeSupplier);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,
 			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService, killcountService,
-			skillIconManager);
+			skillIconManager, worldSupplier, worldHopper, friendsChatOwnerSupplier);
 
 		JPanel display = new JPanel(new BorderLayout());
 		display.setBackground(ColorScheme.DARK_GRAY_COLOR);

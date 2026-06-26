@@ -3,7 +3,6 @@ package net.osparty.ui;
 import net.osparty.HostApplicationHandler;
 import net.osparty.KillcountService;
 import net.osparty.PersonalBests;
-import net.osparty.api.MockApplicants;
 import net.osparty.api.PartyService;
 import net.osparty.model.AccountTypes;
 import net.osparty.model.Activity;
@@ -40,6 +39,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntConsumer;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -87,6 +88,9 @@ class CurrentPanel extends JPanel
 	private final RuneWatchService runeWatch;
 	private final KillcountService killcounts;
 	private final SkillIconManager skillIcons;
+	private final IntSupplier currentWorld;
+	private final IntConsumer worldHopper;
+	private final Supplier<String> friendsChatOwnerSupplier;
 
 	/** Skills in the in-game skills-tab layout (row-major, 3 columns), total last. */
 	private static final Skill[] SKILL_LAYOUT = {
@@ -128,7 +132,8 @@ class CurrentPanel extends JPanel
 	CurrentPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, PartyState partyState, ItemManager itemManager,
 		LiveParty liveParty, RuneWatchService runeWatch, KillcountService killcounts,
-		SkillIconManager skillIcons)
+		SkillIconManager skillIcons, IntSupplier currentWorld, IntConsumer worldHopper,
+		Supplier<String> friendsChatOwnerSupplier)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -139,6 +144,9 @@ class CurrentPanel extends JPanel
 		this.runeWatch = runeWatch;
 		this.killcounts = killcounts;
 		this.skillIcons = skillIcons;
+		this.currentWorld = currentWorld;
+		this.worldHopper = worldHopper;
+		this.friendsChatOwnerSupplier = friendsChatOwnerSupplier;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -288,6 +296,8 @@ class CurrentPanel extends JPanel
 		}
 		else
 		{
+			// The friends chat the host is in (if any); used to flag who has joined it.
+			String hostFc = hostFriendsChat(roster, host);
 			boolean anyPending = false;
 			for (RosterMember member : roster)
 			{
@@ -301,7 +311,7 @@ class CurrentPanel extends JPanel
 					}
 					continue;
 				}
-				content.add(buildMemberEntry(party, activity, member, host));
+				content.add(buildMemberEntry(party, activity, member, host, hostFc));
 				content.add(Box.createVerticalStrut(4));
 			}
 
@@ -318,7 +328,7 @@ class CurrentPanel extends JPanel
 				{
 					if (member.getStatus() == Status.PENDING && !member.isLocal() && member.getData() != null)
 					{
-						content.add(buildMemberEntry(party, activity, member, true));
+						content.add(buildMemberEntry(party, activity, member, true, hostFc));
 						content.add(Box.createVerticalStrut(4));
 					}
 				}
@@ -333,19 +343,6 @@ class CurrentPanel extends JPanel
 		else
 		{
 			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
-		}
-
-		// Host test tool: inject a fake applicant so Admit/Decline can be exercised
-		// without a second account. It never touches the network.
-		if (host && liveParty.isConnected())
-		{
-			JButton simulate = smallButton("Simulate join request");
-			simulate.addActionListener(e -> {
-				liveParty.addSimulatedApplicant(fakeUpdate(activity));
-				refresh();
-			});
-			content.add(Box.createVerticalStrut(6));
-			content.add(leftRow(simulate));
 		}
 
 		content.add(Box.createVerticalStrut(8));
@@ -411,7 +408,8 @@ class CurrentPanel extends JPanel
 		}
 	}
 
-	private JPanel buildMemberEntry(Party party, Activity activity, RosterMember member, boolean host)
+	private JPanel buildMemberEntry(Party party, Activity activity, RosterMember member, boolean host,
+		String hostFc)
 	{
 		Status status = member.getStatus();
 		boolean isExpanded = expanded.contains(member.getMemberId());
@@ -451,34 +449,40 @@ class CurrentPanel extends JPanel
 			}
 		});
 
-		// Name on top, optional warnings (RuneWatch / non-ironman) in the middle, and
-		// the action buttons (Admit/Decline/Kick) on their own row below.
+		// Name on top, then a world / friends-chat meta row and optional warnings
+		// (RuneWatch / non-ironman), and the action buttons on their own row below.
 		JPanel top = new JPanel(new BorderLayout(0, 4));
 		top.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		top.add(headerRow, BorderLayout.NORTH);
 
-		List<JComponent> notes = new ArrayList<>();
+		JPanel infoStack = new JPanel();
+		infoStack.setLayout(new BoxLayout(infoStack, BoxLayout.Y_AXIS));
+		infoStack.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		JComponent meta = buildMemberMeta(member, host, hostFc);
+		if (meta != null)
+		{
+			meta.setAlignmentX(Component.LEFT_ALIGNMENT);
+			infoStack.add(meta);
+		}
+
 		RuneWatchCase flagged = runeWatch.get(member.getName());
 		if (flagged != null)
 		{
-			notes.add(runeWatchBadge(flagged));
+			JComponent badge = runeWatchBadge(flagged);
+			badge.setAlignmentX(Component.LEFT_ALIGNMENT);
+			infoStack.add(badge);
 		}
 		if (party.isIronmanOnly() && status != Status.HOST && member.getData() != null
 			&& !AccountTypes.isIronman(AccountTypes.fromName(member.getData().getAccountType())))
 		{
-			notes.add(warnBadge("Not an ironman"));
+			JComponent badge = warnBadge("Not an ironman");
+			badge.setAlignmentX(Component.LEFT_ALIGNMENT);
+			infoStack.add(badge);
 		}
-		if (!notes.isEmpty())
+		if (infoStack.getComponentCount() > 0)
 		{
-			JPanel notesPanel = new JPanel();
-			notesPanel.setLayout(new BoxLayout(notesPanel, BoxLayout.Y_AXIS));
-			notesPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			for (JComponent note : notes)
-			{
-				note.setAlignmentX(Component.LEFT_ALIGNMENT);
-				notesPanel.add(note);
-			}
-			top.add(notesPanel, BorderLayout.CENTER);
+			top.add(infoStack, BorderLayout.CENTER);
 		}
 
 		JComponent actions = buildMemberActions(activity, member, host);
@@ -529,6 +533,89 @@ class CurrentPanel extends JPanel
 			return null;
 		}
 		return wrap;
+	}
+
+	/**
+	 * The world / friends-chat row under a member's name: their world (with a Hop
+	 * button when it differs from ours), and a check/cross showing whether they're
+	 * in the host's friends chat (with a host-only "Request FC" nudge when not).
+	 * @return the row, or {@code null} when there's nothing to show.
+	 */
+	private JComponent buildMemberMeta(RosterMember member, boolean host, String hostFc)
+	{
+		PlayerUpdate data = member.getData();
+		int world = data != null ? data.getWorld() : 0;
+		boolean showFc = hostFc != null && data != null;
+		boolean inFc = showFc && hostFc.equalsIgnoreCase(nz(data.getFriendsChatOwner()));
+
+		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+		boolean any = false;
+
+		if (world > 0)
+		{
+			JLabel worldLabel = new JLabel("W" + world);
+			worldLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			worldLabel.setFont(FontManager.getRunescapeSmallFont());
+			row.add(worldLabel);
+			any = true;
+
+			int mine = currentWorld.getAsInt();
+			if (mine > 0 && mine != world)
+			{
+				JButton hop = smallButton("Hop to");
+				hop.setToolTipText("Hop to world " + world);
+				hop.addActionListener(e -> {
+					worldHopper.accept(world);
+					setStatus("Hopping to world " + world + "...");
+				});
+				row.add(hop);
+			}
+		}
+
+		if (showFc)
+		{
+			JLabel fcIcon = new JLabel(inFc ? StatusIcons.CHECK : StatusIcons.CROSS);
+			fcIcon.setToolTipText(inFc ? "In the host's friends chat" : "Not in the host's friends chat");
+			row.add(fcIcon);
+			any = true;
+
+			// Host can nudge a member who hasn't joined the friends chat yet.
+			if (host && !member.isLocal() && !inFc)
+			{
+				JButton request = smallButton("Request FC");
+				request.setToolTipText("Ask " + member.getName() + " to join your friends chat");
+				request.addActionListener(e -> requestFc(member, hostFc));
+				row.add(request);
+			}
+		}
+
+		return any ? row : null;
+	}
+
+	/** The friends chat the host is in, or {@code null} if the host isn't in one. */
+	private String hostFriendsChat(List<RosterMember> roster, boolean host)
+	{
+		if (host)
+		{
+			String own = friendsChatOwnerSupplier.get();
+			return own == null || own.isEmpty() ? null : own;
+		}
+		for (RosterMember member : roster)
+		{
+			if (member.getStatus() == Status.HOST && member.getData() != null)
+			{
+				String fc = member.getData().getFriendsChatOwner();
+				return fc == null || fc.isEmpty() ? null : fc;
+			}
+		}
+		return null;
+	}
+
+	private static String nz(String value)
+	{
+		return value == null ? "" : value;
 	}
 
 	/**
@@ -833,21 +920,6 @@ class CurrentPanel extends JPanel
 		return applicant;
 	}
 
-	/** Build a fake applicant's live report from the mock generator (host testing). */
-	private PlayerUpdate fakeUpdate(Activity activity)
-	{
-		Applicant fake = MockApplicants.randomFor(activity != null ? activity : Activity.CHAMBERS_OF_XERIC);
-		PlayerUpdate update = new PlayerUpdate();
-		update.setName(fake.getName());
-		update.setCombatLevel(fake.getCombatLevel());
-		update.setStats(fake.getStats());
-		update.setEquipment(fake.getEquipment());
-		update.setInventory(fake.getInventory());
-		update.setKillCount(fake.getKillCount());
-		update.setHardModeKillCount(fake.getHardModeKillCount());
-		return update;
-	}
-
 	// ---- host / member actions ----------------------------------------------
 
 	private void admit(Activity activity, RosterMember member)
@@ -885,6 +957,12 @@ class CurrentPanel extends JPanel
 		detailTab.remove(member.getMemberId());
 		setStatus("Kicked " + member.getName() + ".");
 		refresh();
+	}
+
+	private void requestFc(RosterMember member, String hostFc)
+	{
+		liveParty.requestFriendsChat(member.getMemberId(), hostFc);
+		setStatus("Asked " + member.getName() + " to join friends chat \"" + hostFc + "\".");
 	}
 
 	private JPanel buildActions(Party party, boolean host)
@@ -1038,15 +1116,6 @@ class CurrentPanel extends JPanel
 	private static String escape(String text)
 	{
 		return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-	}
-
-	private JPanel leftRow(JComponent inner)
-	{
-		JPanel row = cappedPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		row.setAlignmentX(Component.LEFT_ALIGNMENT);
-		row.add(inner);
-		return row;
 	}
 
 	private JLabel sectionLabel(String text)

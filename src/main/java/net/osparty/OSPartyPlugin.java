@@ -5,6 +5,7 @@ import net.osparty.api.PartyService;
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
 import net.osparty.model.Party;
+import net.osparty.party.FcRequestMessage;
 import net.osparty.party.LiveParty;
 import net.osparty.party.MemberCommand;
 import net.osparty.party.PartyStateMessage;
@@ -12,6 +13,7 @@ import net.osparty.party.PlayerUpdate;
 import net.osparty.runewatch.RuneWatchService;
 import net.osparty.ui.OSPartyPanel;
 import net.osparty.ui.ApplicantOverlay;
+import net.osparty.ui.FcRequestOverlay;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.time.temporal.ChronoUnit;
@@ -31,9 +33,13 @@ import net.runelite.api.events.StatChanged;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.api.World;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
+import net.runelite.client.game.WorldService;
+import net.runelite.client.util.WorldUtil;
+import net.runelite.http.api.worlds.WorldResult;
 import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
@@ -92,6 +98,9 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private PluginManager pluginManager;
 
 	@Inject
+	private WorldService worldService;
+
+	@Inject
 	private OSPartyConfig config;
 
 	/** Config key storing whether the user has consented to data sharing. */
@@ -100,6 +109,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private OSPartyPanel panel;
 	private NavigationButton navButton;
 	private ApplicantOverlay applicantOverlay;
+	private FcRequestOverlay fcRequestOverlay;
 
 	/**
 	 * Last known logged in player name. Updated on the client thread and read
@@ -126,6 +136,9 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		applicantOverlay = new ApplicantOverlay();
 		overlayManager.add(applicantOverlay);
 
+		fcRequestOverlay = new FcRequestOverlay();
+		overlayManager.add(fcRequestOverlay);
+
 		// Stand up the live P2P party layer (real roster + gear/inv/stats + host
 		// management); the API only advertises the room.
 		liveParty.register();
@@ -135,7 +148,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		panel = new OSPartyPanel(partyService, config, this::getPlayerName, this,
 			this::getFriendsChatOwner, this::getCurrentWorld, itemManager, liveParty, runeWatchService,
-			this::getAccountType, killcountService, skillIconManager);
+			this::getAccountType, killcountService, skillIconManager, this::hopTo);
 
 		navButton = NavigationButton.builder()
 			.tooltip("OSParty")
@@ -214,7 +227,9 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		liveParty.unregister();
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(applicantOverlay);
+		overlayManager.remove(fcRequestOverlay);
 		applicantOverlay = null;
+		fcRequestOverlay = null;
 		panel = null;
 		navButton = null;
 		playerName = null;
@@ -299,6 +314,23 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	}
 
 	@Subscribe
+	public void onFcRequestMessage(FcRequestMessage event)
+	{
+		// Only show the popup if this request is aimed at us.
+		if (!liveParty.isForLocalMember(event.getTargetMemberId()))
+		{
+			return;
+		}
+		String fc = event.getFriendsChat();
+		if (fcRequestOverlay != null && fc != null)
+		{
+			fcRequestOverlay.show(event.getHostName(), fc, 3000);
+			gameMessage((event.getHostName() != null ? event.getHostName() : "The host")
+				+ " asks you to join the friends chat \"" + fc + "\".");
+		}
+	}
+
+	@Subscribe
 	public void onUserJoin(UserJoin event)
 	{
 		liveParty.onPeerJoined(event.getMemberId());
@@ -365,6 +397,38 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	public AccountType getAccountType()
 	{
 		return accountType;
+	}
+
+	/**
+	 * Hop the client to {@code worldNum} (a party member's world). Looks the world
+	 * up in the world list and performs the change on the client thread. Safe to
+	 * call from the EDT.
+	 */
+	public void hopTo(int worldNum)
+	{
+		if (worldNum <= 0 || client.getWorld() == worldNum)
+		{
+			return;
+		}
+
+		WorldResult worlds = worldService.getWorlds();
+		net.runelite.http.api.worlds.World target = worlds != null ? worlds.findWorld(worldNum) : null;
+		if (target == null)
+		{
+			gameMessage("Could not find world " + worldNum + " to hop to.");
+			return;
+		}
+
+		clientThread.invoke(() -> {
+			World rsWorld = client.createWorld();
+			rsWorld.setActivity(target.getActivity());
+			rsWorld.setAddress(target.getAddress());
+			rsWorld.setId(target.getId());
+			rsWorld.setPlayerCount(target.getPlayers());
+			rsWorld.setLocation(target.getLocation());
+			rsWorld.setTypes(WorldUtil.toWorldTypes(target.getTypes()));
+			client.changeWorld(rsWorld);
+		});
 	}
 
 	@Override

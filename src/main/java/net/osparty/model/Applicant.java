@@ -5,8 +5,8 @@ import lombok.Data;
 
 /**
  * A player applying to join a hosted party. Carries the combat stats and boss
- * killcount the host uses to decide whether to accept. Generated as fake data
- * for now (see {@code MockApplicants}).
+ * killcount the host uses to decide whether to accept. Populated from the
+ * applicant's live peer-to-peer self-report (see {@code PlayerUpdate}).
  */
 @Data
 public class Applicant
