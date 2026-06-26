@@ -16,6 +16,7 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LayoutManager;
+import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -36,6 +37,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.Scrollable;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.SwingUtilities;
@@ -130,8 +132,9 @@ class SearchPanel extends JPanel
 		resultsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
 		// Wrap results so a long party list scrolls within the tab rather than
-		// growing the whole side-panel.
-		JPanel resultsWrap = new JPanel(new BorderLayout());
+		// growing the whole side-panel. Tracks the viewport width so cards never
+		// exceed it (otherwise a wide card pushes its Apply button off the edge).
+		JPanel resultsWrap = new ScrollableColumn(new BorderLayout());
 		resultsWrap.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		resultsWrap.add(resultsPanel, BorderLayout.NORTH);
 
@@ -1023,5 +1026,47 @@ class SearchPanel extends JPanel
 	private void setStatus(String text)
 	{
 		statusLabel.setText(text);
+	}
+
+	/**
+	 * A scroll view that tracks the viewport width, so cards are constrained to the
+	 * panel width and their right-aligned buttons never get clipped off the edge.
+	 */
+	private static final class ScrollableColumn extends JPanel implements Scrollable
+	{
+		ScrollableColumn(LayoutManager layout)
+		{
+			super(layout);
+		}
+
+		@Override
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		@Override
+		public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction)
+		{
+			return 16;
+		}
+
+		@Override
+		public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction)
+		{
+			return 64;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
 	}
 }

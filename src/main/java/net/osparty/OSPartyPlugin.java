@@ -10,10 +10,12 @@ import net.osparty.party.LiveParty;
 import net.osparty.party.MemberCommand;
 import net.osparty.party.PartyStateMessage;
 import net.osparty.party.PlayerUpdate;
+import net.osparty.party.ReadyCheckMessage;
 import net.osparty.runewatch.RuneWatchService;
 import net.osparty.ui.OSPartyPanel;
 import net.osparty.ui.ApplicantOverlay;
 import net.osparty.ui.FcRequestOverlay;
+import net.osparty.ui.ReadyCheckOverlay;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.time.temporal.ChronoUnit;
@@ -115,6 +117,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private NavigationButton navButton;
 	private ApplicantOverlay applicantOverlay;
 	private FcRequestOverlay fcRequestOverlay;
+	private ReadyCheckOverlay readyCheckOverlay;
 
 	/**
 	 * Last known logged in player name. Updated on the client thread and read
@@ -170,6 +173,21 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		fcRequestOverlay = new FcRequestOverlay();
 		overlayManager.add(fcRequestOverlay);
+
+		readyCheckOverlay = new ReadyCheckOverlay(liveParty);
+		overlayManager.add(readyCheckOverlay);
+
+		// Ready-check notifications: a chat ping when one starts/expires, and a chat
+		// line plus optional sound when everyone is ready.
+		liveParty.setOnReadyCheckStarted(starter ->
+			gameMessage(starter + " started a ready check - ready up in the OSParty panel."));
+		liveParty.setOnAllReady(() -> {
+			Activity activity = Activity.fromId(liveParty.currentActivityId());
+			String name = activity != null ? activity.getDisplayName() : "the activity";
+			gameMessage("Everyone is ready for " + name + "!");
+			playReadySound();
+		});
+		liveParty.setOnReadyExpired(() -> gameMessage("Ready check expired."));
 
 		// Stand up the live P2P party layer (real roster + gear/inv/stats + host
 		// management); the API only advertises the room.
@@ -260,8 +278,10 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(applicantOverlay);
 		overlayManager.remove(fcRequestOverlay);
+		overlayManager.remove(readyCheckOverlay);
 		applicantOverlay = null;
 		fcRequestOverlay = null;
+		readyCheckOverlay = null;
 		panel = null;
 		navButton = null;
 		playerName = null;
@@ -361,6 +381,12 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	public void onMemberCommand(MemberCommand event)
 	{
 		liveParty.onMemberCommand(event);
+	}
+
+	@Subscribe
+	public void onReadyCheckMessage(ReadyCheckMessage event)
+	{
+		liveParty.onReadyCheck(event);
 	}
 
 	@Subscribe
@@ -643,6 +669,48 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	{
 		gameMessage((accepted ? "Accepted " : "Declined ") + applicant.getName()
 			+ " for your " + activity.getDisplayName() + " party.");
+	}
+
+	/** Play the configured ready-check sound (custom .wav, or a default beep). */
+	private void playReadySound()
+	{
+		if (!config.readyCheckSound())
+		{
+			return;
+		}
+		String file = config.readyCheckSoundFile();
+		if (file == null || file.trim().isEmpty())
+		{
+			java.awt.Toolkit.getDefaultToolkit().beep();
+			return;
+		}
+		String path = file.trim();
+		new Thread(() -> {
+			try
+			{
+				java.io.File wav = new java.io.File(path);
+				if (!wav.isFile())
+				{
+					java.awt.Toolkit.getDefaultToolkit().beep();
+					return;
+				}
+				javax.sound.sampled.AudioInputStream in = javax.sound.sampled.AudioSystem.getAudioInputStream(wav);
+				javax.sound.sampled.Clip clip = javax.sound.sampled.AudioSystem.getClip();
+				clip.addLineListener(event -> {
+					if (event.getType() == javax.sound.sampled.LineEvent.Type.STOP)
+					{
+						clip.close();
+					}
+				});
+				clip.open(in);
+				clip.start();
+			}
+			catch (Exception e)
+			{
+				log.warn("OSParty: failed to play ready sound '{}'", path, e);
+				java.awt.Toolkit.getDefaultToolkit().beep();
+			}
+		}, "osparty-ready-sound").start();
 	}
 
 	/**

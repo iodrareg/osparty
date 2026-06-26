@@ -372,6 +372,13 @@ class CurrentPanel extends JPanel
 			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
 		}
 
+		// Ready check (anyone can start; everyone readies up).
+		if (liveParty.isConnected())
+		{
+			content.add(Box.createVerticalStrut(8));
+			content.add(buildReadyCheck());
+		}
+
 		content.add(Box.createVerticalStrut(8));
 		content.add(buildActions(party, host));
 
@@ -1017,6 +1024,49 @@ class CurrentPanel extends JPanel
 	{
 		liveParty.requestFriendsChat(member.getMemberId(), hostFc);
 		setStatus("Asked " + member.getName() + " to join friends chat \"" + hostFc + "\".");
+	}
+
+	/** The ready-check control: Start when idle, Ready up when one's running, else status. */
+	private JComponent buildReadyCheck()
+	{
+		LiveParty.ReadyCheckStatus status = liveParty.readyCheck();
+		JPanel row = cappedPanel(new BorderLayout());
+		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		if (status == null)
+		{
+			JButton start = new JButton("Start ready check");
+			start.setFocusPainted(false);
+			start.addActionListener(e -> {
+				liveParty.startReadyCheck();
+				setStatus("Ready check started.");
+				refresh();
+			});
+			row.add(start, BorderLayout.CENTER);
+			return row;
+		}
+
+		String counts = status.getReady() + "/" + status.getTotal();
+		if (!status.isLocalReady())
+		{
+			JButton ready = new JButton("Ready up (" + counts + ")");
+			ready.setFocusPainted(false);
+			ready.addActionListener(e -> {
+				liveParty.markReady();
+				refresh();
+			});
+			row.add(ready, BorderLayout.CENTER);
+		}
+		else
+		{
+			JLabel waiting = new JLabel("Ready " + counts + " - " + status.getSecondsLeft() + "s left");
+			waiting.setForeground(ColorScheme.PROGRESS_COMPLETE_COLOR);
+			waiting.setFont(FontManager.getRunescapeSmallFont());
+			waiting.setHorizontalAlignment(SwingConstants.CENTER);
+			row.add(waiting, BorderLayout.CENTER);
+		}
+		return row;
 	}
 
 	private JPanel buildActions(Party party, boolean host)

@@ -52,4 +52,26 @@ public interface OSPartyConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "readyCheckSound",
+		name = "Ready-check sound",
+		description = "Play a sound when everyone in the party has readied up.",
+		position = 5
+	)
+	default boolean readyCheckSound()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "readyCheckSoundFile",
+		name = "Custom ready sound",
+		description = "Path to a .wav file to play on full readiness. Leave blank for a default beep.",
+		position = 6
+	)
+	default String readyCheckSoundFile()
+	{
+		return "";
+	}
 }

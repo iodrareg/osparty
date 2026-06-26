@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -60,6 +61,20 @@ public class LiveParty
 		boolean local;
 		boolean online; // recently heard from (or ourselves)
 	}
+
+	/** A snapshot of the active ready check for the UI. */
+	@Value
+	public static class ReadyCheckStatus
+	{
+		String starter;
+		int ready;
+		int total;
+		int secondsLeft;
+		boolean localReady;
+	}
+
+	/** A ready check expires this long after it starts if not everyone readies. */
+	private static final long READY_CHECK_TIMEOUT_MS = 30_000;
 
 	/** Consider a member offline if we haven't heard from them in this long. */
 	private static final long ONLINE_TIMEOUT_MS = 20_000;
@@ -114,6 +129,17 @@ public class LiveParty
 	/** Invoked (off-EDT) when our membership ends — host closed, or we were kicked. */
 	private volatile Runnable onEnded;
 
+	// ---- ready check (one active per party) ----------------------------------
+	private volatile long readyCheckId;
+	private volatile long readyCheckStartedAt;
+	private volatile String readyCheckStarter;
+	private long readyCheckSeq;
+	private final Set<Long> readyMembers = ConcurrentHashMap.newKeySet();
+	private final AtomicBoolean readyAllNotified = new AtomicBoolean();
+	private volatile Consumer<String> onReadyCheckStarted;
+	private volatile Runnable onAllReady;
+	private volatile Runnable onReadyExpired;
+
 	@Inject
 	private LiveParty(PartyService partyService, WSClient wsClient, Client client, ClientThread clientThread,
 		ConfigManager configManager)
@@ -131,6 +157,7 @@ public class LiveParty
 		wsClient.registerMessage(PartyStateMessage.class);
 		wsClient.registerMessage(MemberCommand.class);
 		wsClient.registerMessage(FcRequestMessage.class);
+		wsClient.registerMessage(ReadyCheckMessage.class);
 	}
 
 	public void unregister()
@@ -139,7 +166,23 @@ public class LiveParty
 		wsClient.unregisterMessage(PartyStateMessage.class);
 		wsClient.unregisterMessage(MemberCommand.class);
 		wsClient.unregisterMessage(FcRequestMessage.class);
+		wsClient.unregisterMessage(ReadyCheckMessage.class);
 		reset();
+	}
+
+	public void setOnReadyCheckStarted(Consumer<String> onReadyCheckStarted)
+	{
+		this.onReadyCheckStarted = onReadyCheckStarted;
+	}
+
+	public void setOnAllReady(Runnable onAllReady)
+	{
+		this.onAllReady = onAllReady;
+	}
+
+	public void setOnReadyExpired(Runnable onReadyExpired)
+	{
+		this.onReadyExpired = onReadyExpired;
 	}
 
 	public void addListener(Runnable listener)
@@ -219,6 +262,7 @@ public class LiveParty
 		playerData.clear();
 		lastSeen.clear();
 		leaving.clear();
+		clearReadyCheck();
 		ticksSinceLocalBroadcast = 0;
 		currentActivityId = null;
 		currentTeamSize = 0;
@@ -327,6 +371,155 @@ public class LiveParty
 		partyService.send(command);
 	}
 
+	// ---- ready check ---------------------------------------------------------
+
+	/** The activity/team-size we're grouped for (for the all-ready message). */
+	public String currentActivityId()
+	{
+		return currentActivityId;
+	}
+
+	/** Start a ready check (anyone in the party may). The starter counts as ready. */
+	public void startReadyCheck()
+	{
+		if (!isConnected())
+		{
+			return;
+		}
+		long id = (localId() << 16) | (++readyCheckSeq & 0xFFFF);
+		beginReadyCheck(id, localName(), localId());
+
+		ReadyCheckMessage message = new ReadyCheckMessage();
+		message.setType(ReadyCheckMessage.Type.START);
+		message.setCheckId(id);
+		message.setStarter(readyCheckStarter);
+		partyService.send(message);
+		fire();
+	}
+
+	/** Mark ourselves ready for the active check and tell the party. */
+	public void markReady()
+	{
+		if (readyCheckId == 0)
+		{
+			return;
+		}
+		readyMembers.add(localId());
+		ReadyCheckMessage message = new ReadyCheckMessage();
+		message.setType(ReadyCheckMessage.Type.READY);
+		message.setCheckId(readyCheckId);
+		partyService.send(message);
+		checkAllReady();
+		fire();
+	}
+
+	public void onReadyCheck(ReadyCheckMessage message)
+	{
+		if (message.getType() == ReadyCheckMessage.Type.START)
+		{
+			beginReadyCheck(message.getCheckId(), message.getStarter(), message.getMemberId());
+			Consumer<String> cb = onReadyCheckStarted;
+			if (cb != null)
+			{
+				cb.accept(message.getStarter());
+			}
+		}
+		else if (message.getCheckId() == readyCheckId && readyCheckId != 0)
+		{
+			readyMembers.add(message.getMemberId());
+			checkAllReady();
+		}
+		fire();
+	}
+
+	private void beginReadyCheck(long id, String starter, long starterMemberId)
+	{
+		readyCheckId = id;
+		readyCheckStartedAt = System.currentTimeMillis();
+		readyCheckStarter = starter != null ? starter : "Someone";
+		readyAllNotified.set(false);
+		readyMembers.clear();
+		readyMembers.add(starterMemberId);
+	}
+
+	private void clearReadyCheck()
+	{
+		readyCheckId = 0;
+		readyCheckStartedAt = 0;
+		readyCheckStarter = null;
+		readyMembers.clear();
+		readyAllNotified.set(false);
+	}
+
+	/** Fire the all-ready callback once when every (non-pending) member is ready. */
+	private void checkAllReady()
+	{
+		if (readyCheckId == 0)
+		{
+			return;
+		}
+		Set<Long> required = activeMemberIds();
+		if (required.isEmpty() || !readyMembers.containsAll(required))
+		{
+			return;
+		}
+		if (readyAllNotified.compareAndSet(false, true))
+		{
+			Runnable cb = onAllReady;
+			if (cb != null)
+			{
+				cb.run();
+			}
+			clearReadyCheck();
+		}
+	}
+
+	/** Member ids that must ready up: everyone admitted (host + members), not pending. */
+	private Set<Long> activeMemberIds()
+	{
+		Set<Long> ids = new HashSet<>();
+		for (RosterMember member : roster())
+		{
+			if (member.getStatus() != Status.PENDING)
+			{
+				ids.add(member.getMemberId());
+			}
+		}
+		return ids;
+	}
+
+	/** @return the active ready check for the UI, or null when none is running. */
+	public ReadyCheckStatus readyCheck()
+	{
+		long id = readyCheckId;
+		if (id == 0)
+		{
+			return null;
+		}
+		Set<Long> required = activeMemberIds();
+		int ready = 0;
+		for (long memberId : required)
+		{
+			if (readyMembers.contains(memberId))
+			{
+				ready++;
+			}
+		}
+		long left = Math.max(0, READY_CHECK_TIMEOUT_MS - (System.currentTimeMillis() - readyCheckStartedAt)) / 1000;
+		return new ReadyCheckStatus(readyCheckStarter, ready, required.size(), (int) left,
+			readyMembers.contains(localId()));
+	}
+
+	private String localName()
+	{
+		PlayerUpdate self = playerData.get(localId());
+		if (self != null && self.getName() != null)
+		{
+			return self.getName();
+		}
+		return hosting && hostName != null ? hostName : "Someone";
+	}
+
 	// ---- per-tick flushing (must be called from the client thread) -----------
 
 	/**
@@ -340,6 +533,7 @@ public class LiveParty
 			return;
 		}
 		pruneStaleMembers();
+		expireReadyCheck();
 		flushState();
 		// Periodically re-announce ourselves so a peer who joined after our last
 		// broadcast still converges on our gear/stats (the relay has no replay).
@@ -402,6 +596,25 @@ public class LiveParty
 		if (changed)
 		{
 			stateDirty = true;
+			fire();
+		}
+	}
+
+	/** Drop an active ready check once it's older than the timeout without all-ready. */
+	private void expireReadyCheck()
+	{
+		if (readyCheckId == 0)
+		{
+			return;
+		}
+		if (System.currentTimeMillis() - readyCheckStartedAt > READY_CHECK_TIMEOUT_MS)
+		{
+			clearReadyCheck();
+			Runnable cb = onReadyExpired;
+			if (cb != null)
+			{
+				cb.run();
+			}
 			fire();
 		}
 	}
