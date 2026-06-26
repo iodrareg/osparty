@@ -29,6 +29,9 @@ public class Applicant
 	/** Personal best (seconds) for the activity+team size; -1 when unknown. */
 	private double pbSeconds = -1;
 
+	/** The applicant's account type name (NORMAL / IRONMAN / ...); null when unknown. */
+	private String accountType;
+
 	/**
 	 * Worn equipment as OSRS item ids, indexed by {@link EquipmentSlot#ordinal()}
 	 * (length {@link EquipmentSlot#COUNT}). A value {@code <= 0} means the slot is

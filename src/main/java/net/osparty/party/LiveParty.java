@@ -394,6 +394,14 @@ public class LiveParty
 		message.setCheckId(id);
 		message.setStarter(readyCheckStarter);
 		partyService.send(message);
+
+		// Fire locally too: we don't receive our own broadcast, but the starter
+		// should also get the start notification/sound.
+		Consumer<String> cb = onReadyCheckStarted;
+		if (cb != null)
+		{
+			cb.accept(readyCheckStarter);
+		}
 		fire();
 	}
 

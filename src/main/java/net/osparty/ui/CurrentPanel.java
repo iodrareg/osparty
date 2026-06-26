@@ -130,6 +130,9 @@ class CurrentPanel extends JPanel
 	private final Set<Long> notifiedPending = new HashSet<>();
 	/** Last occupancy we reported to the ad, to avoid redundant heartbeats. */
 	private int lastReportedSize = -1;
+	/** memberId -> epoch millis until which the "Request FC" button is on cooldown. */
+	private final Map<Long, Long> fcRequestCooldown = new HashMap<>();
+	private static final long FC_REQUEST_COOLDOWN_MS = 10_000;
 
 	CurrentPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, PartyState partyState, ItemManager itemManager,
@@ -610,9 +613,17 @@ class CurrentPanel extends JPanel
 			&& !sameRsn(data.getFriendsChatOwner(), hostName)
 			&& sameRsn(friendsChatOwnerSupplier.get(), hostName))
 		{
-			JButton request = smallButton("Request FC");
-			request.setToolTipText("Ask " + member.getName() + " to join your friends chat");
-			request.addActionListener(e -> requestFc(member, hostName));
+			long remaining = fcRequestCooldown.getOrDefault(member.getMemberId(), 0L) - System.currentTimeMillis();
+			boolean ready = remaining <= 0;
+			JButton request = smallButton(ready ? "Request FC" : "Requested");
+			request.setEnabled(ready);
+			request.setToolTipText(ready
+				? "Ask " + member.getName() + " to join your friends chat"
+				: "Wait a few seconds before asking again");
+			if (ready)
+			{
+				request.addActionListener(e -> requestFc(member, hostName));
+			}
 			wrap.add(request);
 			any = true;
 		}
@@ -978,6 +989,7 @@ class CurrentPanel extends JPanel
 		applicant.setKillCount(update.getKillCount());
 		applicant.setHardModeKillCount(update.getHardModeKillCount());
 		applicant.setPbSeconds(update.getPbSeconds());
+		applicant.setAccountType(update.getAccountType());
 		return applicant;
 	}
 
@@ -1024,6 +1036,12 @@ class CurrentPanel extends JPanel
 	{
 		liveParty.requestFriendsChat(member.getMemberId(), hostFc);
 		setStatus("Asked " + member.getName() + " to join friends chat \"" + hostFc + "\".");
+		// Throttle: keep the button disabled for a few seconds, then re-enable.
+		fcRequestCooldown.put(member.getMemberId(), System.currentTimeMillis() + FC_REQUEST_COOLDOWN_MS);
+		Timer reEnable = new Timer((int) FC_REQUEST_COOLDOWN_MS, e -> refresh());
+		reEnable.setRepeats(false);
+		reEnable.start();
+		refresh();
 	}
 
 	/** The ready-check control: Start when idle, Ready up when one's running, else status. */

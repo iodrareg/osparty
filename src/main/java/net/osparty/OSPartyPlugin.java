@@ -179,8 +179,13 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		// Ready-check notifications: a chat ping when one starts/expires, and a chat
 		// line plus optional sound when everyone is ready.
-		liveParty.setOnReadyCheckStarted(starter ->
-			gameMessage(starter + " started a ready check - ready up in the OSParty panel."));
+		liveParty.setOnReadyCheckStarted(starter -> {
+			gameMessage(starter + " started a ready check - ready up in the OSParty panel.");
+			if (config.readyCheckSound())
+			{
+				playResourceSound("/net/osparty/sounds/readycheck.wav");
+			}
+		});
 		liveParty.setOnAllReady(() -> {
 			Activity activity = Activity.fromId(liveParty.currentActivityId());
 			String name = activity != null ? activity.getDisplayName() : "the activity";
@@ -582,28 +587,78 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	@Override
 	public void announceApplicant(Applicant applicant, Activity activity)
 	{
-		StringBuilder line = new StringBuilder()
-			.append(applicant.getName())
-			.append(" applied to your ").append(activity.getDisplayName())
-			.append(" party (cb ").append(applicant.getCombatLevel());
-		if (applicant.getKillCount() >= 0)
-		{
-			line.append(", KC ").append(applicant.getKillCount());
-			if (activity.hasHardMode() && applicant.getHardModeKillCount() >= 0)
-			{
-				line.append(", ").append(activity.getHardModeLabel())
-					.append(' ').append(applicant.getHardModeKillCount());
-			}
-		}
-		line.append("). Accept or decline in the side panel.");
-
-		gameMessage(line.toString());
+		gameMessage(applicant.getName() + " applied to your " + activity.getDisplayName()
+			+ " party - " + applicantSummary(applicant, activity) + ". Accept or decline in the side panel.");
 
 		// Also offer an in-game chatbox Accept/Decline (driven on the game tick).
 		if (config.inGamePrompts() && applicant.getMemberId() != 0)
 		{
 			promptQueue.add(new PendingPrompt(applicant, activity));
 		}
+	}
+
+	/**
+	 * A compact, information-dense one-liner about an applicant: combat level,
+	 * activity killcount (+ hard-mode), personal best, total level, account type
+	 * and a RuneWatch flag. Used in both the chat ping and the in-game prompt.
+	 */
+	private String applicantSummary(Applicant applicant, Activity activity)
+	{
+		java.util.List<String> parts = new java.util.ArrayList<>();
+		parts.add("cb " + applicant.getCombatLevel());
+
+		if (applicant.getKillCount() >= 0)
+		{
+			StringBuilder kc = new StringBuilder(activity.getDisplayName() + " KC " + applicant.getKillCount());
+			if (activity.hasHardMode() && applicant.getHardModeKillCount() >= 0)
+			{
+				kc.append(" (").append(activity.getHardModeLabel()).append(' ')
+					.append(applicant.getHardModeKillCount()).append(')');
+			}
+			parts.add(kc.toString());
+		}
+
+		if (PersonalBests.isPbActivity(activity.getId()) && applicant.getPbSeconds() >= 0)
+		{
+			parts.add("PB " + PersonalBests.format(applicant.getPbSeconds()));
+		}
+
+		int total = totalLevel(applicant);
+		if (total > 0)
+		{
+			parts.add("total " + total);
+		}
+
+		String tag = net.osparty.model.AccountTypes.tag(
+			net.osparty.model.AccountTypes.fromName(applicant.getAccountType()));
+		if (tag != null)
+		{
+			parts.add(tag);
+		}
+
+		if (runeWatchService.get(applicant.getName()) != null)
+		{
+			parts.add("(!) RuneWatch listed");
+		}
+
+		return String.join(", ", parts);
+	}
+
+	private static int totalLevel(Applicant applicant)
+	{
+		if (applicant.getStats() == null)
+		{
+			return 0;
+		}
+		int total = 0;
+		for (Integer level : applicant.getStats().values())
+		{
+			if (level != null)
+			{
+				total += level;
+			}
+		}
+		return total;
 	}
 
 	/**
@@ -645,16 +700,10 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		Applicant applicant = prompt.applicant;
 		Activity activity = prompt.activity;
 
-		StringBuilder title = new StringBuilder(applicant.getName() + " wants to join");
-		title.append(" (cb ").append(applicant.getCombatLevel());
-		if (applicant.getKillCount() >= 0)
-		{
-			title.append(", ").append(activity.getDisplayName()).append(" KC ").append(applicant.getKillCount());
-		}
-		title.append(')');
+		String title = applicant.getName() + " - " + applicantSummary(applicant, activity);
 
 		promptOpen = true;
-		chatboxPanelManager.openTextMenuInput(title.toString())
+		chatboxPanelManager.openTextMenuInput(title)
 			.option("Accept", () -> {
 				promptOpen = false;
 				if (liveParty.admit(applicant.getMemberId(), applicant.getName()))

@@ -55,8 +55,8 @@ public interface OSPartyConfig extends Config
 
 	@ConfigItem(
 		keyName = "readyCheckSound",
-		name = "Ready-check sound",
-		description = "Play a sound when everyone in the party has readied up.",
+		name = "Ready-check sounds",
+		description = "Play sounds for ready checks (when one starts, and when everyone is ready).",
 		position = 5
 	)
 	default boolean readyCheckSound()
