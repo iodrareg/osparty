@@ -3,11 +3,20 @@ package net.osparty;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 
 @ConfigGroup(OSPartyConfig.GROUP)
 public interface OSPartyConfig extends Config
 {
 	String GROUP = "osparty";
+
+	@ConfigSection(
+		name = "Meme mode",
+		description = "Optional sound effects for party events. All off by default.",
+		position = 10,
+		closedByDefault = true
+	)
+	String MEME_MODE = "memeMode";
 
 	@ConfigItem(
 		keyName = "apiBaseUrl",
@@ -57,32 +66,35 @@ public interface OSPartyConfig extends Config
 		keyName = "readyCheckSound",
 		name = "Ready-check sounds",
 		description = "Play sounds for ready checks (when one starts, and when everyone is ready).",
-		position = 5
+		position = 5,
+		section = MEME_MODE
 	)
 	default boolean readyCheckSound()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
 		keyName = "kickSound",
 		name = "Kick sound",
 		description = "Play a sound when you are kicked from a party.",
-		position = 7
+		position = 7,
+		section = MEME_MODE
 	)
 	default boolean kickSound()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
 		keyName = "friendsChatRequestSound",
 		name = "Friends-chat request sound",
 		description = "Play a sound when a host asks you to join their friends chat.",
-		position = 8
+		position = 8,
+		section = MEME_MODE
 	)
 	default boolean friendsChatRequestSound()
 	{
-		return true;
+		return false;
 	}
 }
