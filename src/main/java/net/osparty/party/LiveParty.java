@@ -14,8 +14,10 @@ import javax.inject.Singleton;
 import javax.swing.SwingUtilities;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
+import net.osparty.PersonalBests;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.party.PartyMember;
 import net.runelite.client.party.PartyService;
 import net.runelite.client.party.WSClient;
@@ -62,6 +64,11 @@ public class LiveParty
 	private final WSClient wsClient;
 	private final Client client;
 	private final ClientThread clientThread;
+	private final ConfigManager configManager;
+
+	/** The activity/team-size of the party we're in (host or member), for our PB lookup. */
+	private volatile String currentActivityId;
+	private volatile int currentTeamSize;
 
 	private final Map<Long, PlayerUpdate> playerData = new ConcurrentHashMap<>();
 	private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
@@ -81,6 +88,13 @@ public class LiveParty
 	/** Admitted applicants (excludes the host). memberId -> display name. */
 	private final Map<Long, String> admitted = new ConcurrentHashMap<>();
 
+	/**
+	 * Members we've kicked/declined who are still briefly in the relay room until
+	 * their client processes the command and leaves. Hidden from the roster so a
+	 * kicked member doesn't flash back as a "pending applicant" (and re-popup).
+	 */
+	private final Set<Long> leaving = ConcurrentHashMap.newKeySet();
+
 	/** Last state received from the host (non-host clients). */
 	private volatile PartyStateMessage lastState;
 
@@ -91,12 +105,14 @@ public class LiveParty
 	private volatile Runnable onEnded;
 
 	@Inject
-	private LiveParty(PartyService partyService, WSClient wsClient, Client client, ClientThread clientThread)
+	private LiveParty(PartyService partyService, WSClient wsClient, Client client, ClientThread clientThread,
+		ConfigManager configManager)
 	{
 		this.partyService = partyService;
 		this.wsClient = wsClient;
 		this.client = client;
 		this.clientThread = clientThread;
+		this.configManager = configManager;
 	}
 
 	public void register()
@@ -140,7 +156,7 @@ public class LiveParty
 	}
 
 	/** Host {@code passphrase}'s room with the given rules. */
-	public void hostParty(String passphrase, String hostName, int capacity,
+	public void hostParty(String passphrase, String hostName, String activityId, int capacity,
 		boolean locked)
 	{
 		reset();
@@ -148,6 +164,8 @@ public class LiveParty
 		this.hostName = hostName;
 		this.capacity = capacity;
 		this.locked = locked;
+		this.currentActivityId = activityId;
+		this.currentTeamSize = capacity;
 		stateDirty = true;
 		localDirty = true;
 		partyService.changeParty(passphrase);
@@ -155,9 +173,11 @@ public class LiveParty
 	}
 
 	/** Join an advertised room as an applicant (pending until the host admits). */
-	public void joinParty(String passphrase)
+	public void joinParty(String passphrase, String activityId, int teamSize)
 	{
 		reset();
+		this.currentActivityId = activityId;
+		this.currentTeamSize = teamSize;
 		localDirty = true;
 		partyService.changeParty(passphrase);
 		fire();
@@ -187,7 +207,10 @@ public class LiveParty
 		playerData.clear();
 		simulated.clear();
 		simulatedAdmitted.clear();
+		leaving.clear();
 		simSeq = -1L;
+		currentActivityId = null;
+		currentTeamSize = 0;
 		lastState = null;
 		stateDirty = false;
 		localDirty = false;
@@ -248,6 +271,7 @@ public class LiveParty
 			return;
 		}
 		admitted.remove(memberId);
+		leaving.add(memberId);
 		sendCommand(MemberCommand.Action.KICK, memberId);
 		stateDirty = true;
 		fire();
@@ -266,6 +290,7 @@ public class LiveParty
 			fire();
 			return;
 		}
+		leaving.add(memberId);
 		sendCommand(MemberCommand.Action.REJECT, memberId);
 		fire();
 	}
@@ -327,6 +352,8 @@ public class LiveParty
 			PlayerUpdate update = LocalPlayerSync.snapshot(client);
 			if (update != null)
 			{
+				// Our personal best for this party's activity+size (read locally).
+				update.setPbSeconds(PersonalBests.read(configManager, currentActivityId, currentTeamSize));
 				broadcastLocal(update);
 			}
 		}
@@ -427,6 +454,7 @@ public class LiveParty
 	public void onPeerLeft(long memberId)
 	{
 		playerData.remove(memberId);
+		leaving.remove(memberId);
 		if (hosting && admitted.remove(memberId) != null)
 		{
 			stateDirty = true;
@@ -476,6 +504,10 @@ public class LiveParty
 		for (PartyMember member : partyService.getMembers())
 		{
 			long id = member.getMemberId();
+			if (leaving.contains(id))
+			{
+				continue; // kicked/declined — don't show until they actually leave
+			}
 			Status status = id == hostId ? Status.HOST
 				: admittedIds.contains(id) ? Status.MEMBER : Status.PENDING;
 			PlayerUpdate data = playerData.get(id);

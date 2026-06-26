@@ -2,7 +2,9 @@ package net.osparty.ui;
 
 import net.osparty.OSPartyConfig;
 import net.osparty.HostApplicationHandler;
+import net.osparty.KillcountService;
 import net.osparty.api.PartyService;
+import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import net.osparty.runewatch.RuneWatchService;
 import java.awt.BorderLayout;
@@ -12,6 +14,7 @@ import net.runelite.api.vars.AccountType;
 import javax.swing.BorderFactory;
 import javax.swing.JPanel;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
@@ -26,6 +29,7 @@ import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 public class OSPartyPanel extends PluginPanel
 {
 	private final PartyState partyState = new PartyState();
+	private final LiveParty liveParty;
 	private final MaterialTabGroup tabGroup;
 	private final MaterialTab searchTab;
 	private final MaterialTab currentTab;
@@ -34,9 +38,12 @@ public class OSPartyPanel extends PluginPanel
 	public OSPartyPanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, Supplier<String> friendsChatOwnerSupplier,
 		IntSupplier worldSupplier, ItemManager itemManager, LiveParty liveParty,
-		RuneWatchService runeWatchService, Supplier<AccountType> accountTypeSupplier)
+		RuneWatchService runeWatchService, Supplier<AccountType> accountTypeSupplier,
+		KillcountService killcountService, SkillIconManager skillIconManager)
 	{
 		super(false);
+
+		this.liveParty = liveParty;
 
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -49,7 +56,8 @@ public class OSPartyPanel extends PluginPanel
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
 			accountTypeSupplier);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,
-			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService);
+			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService, killcountService,
+			skillIconManager);
 
 		JPanel display = new JPanel(new BorderLayout());
 		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -71,6 +79,20 @@ public class OSPartyPanel extends PluginPanel
 		add(display, BorderLayout.CENTER);
 
 		partyState.addListener(this::onPartyStateChanged);
+	}
+
+	/**
+	 * Restore a party the player was hosting before a restart (looked up by RSN).
+	 * No-op if already in a party or the ad has no live-room passphrase.
+	 */
+	public void resumeHostedParty(Party party)
+	{
+		if (partyState.isInParty() || party == null || party.getPassphrase() == null)
+		{
+			return;
+		}
+		liveParty.hostParty(party.getPassphrase(), party.getHost(), party.getActivity(), party.getCapacity(), false);
+		partyState.setHosting(party);
 	}
 
 	private void onPartyStateChanged()

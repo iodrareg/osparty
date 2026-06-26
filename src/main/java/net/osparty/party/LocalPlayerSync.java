@@ -18,11 +18,6 @@ import net.runelite.api.Skill;
  */
 final class LocalPlayerSync
 {
-	private static final Skill[] COMBAT_SKILLS = {
-		Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE, Skill.HITPOINTS,
-		Skill.RANGED, Skill.MAGIC, Skill.PRAYER,
-	};
-
 	private LocalPlayerSync()
 	{
 	}
@@ -43,9 +38,16 @@ final class LocalPlayerSync
 		update.setInventory(inventory(client));
 
 		Map<String, Integer> stats = new LinkedHashMap<>();
-		for (Skill skill : COMBAT_SKILLS)
+		for (Skill skill : Skill.values())
 		{
-			stats.put(skill.getName(), client.getRealSkillLevel(skill));
+			try
+			{
+				stats.put(skill.getName(), client.getRealSkillLevel(skill));
+			}
+			catch (Exception ignored)
+			{
+				// Placeholder/unreleased skills (e.g. Sailing) - skip.
+			}
 		}
 		update.setStats(stats);
 		if (client.getAccountType() != null)

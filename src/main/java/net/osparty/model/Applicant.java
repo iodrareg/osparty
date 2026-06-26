@@ -23,6 +23,9 @@ public class Applicant
 	/** Kills of the harder variant (CM/HM/Expert); -1 when not applicable. */
 	private int hardModeKillCount;
 
+	/** Personal best (seconds) for the activity+team size; -1 when unknown. */
+	private double pbSeconds = -1;
+
 	/**
 	 * Worn equipment as OSRS item ids, indexed by {@link EquipmentSlot#ordinal()}
 	 * (length {@link EquipmentSlot#COUNT}). A value {@code <= 0} means the slot is

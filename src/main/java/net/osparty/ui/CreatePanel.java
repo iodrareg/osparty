@@ -276,7 +276,7 @@ class CreatePanel extends JPanel
 		descriptionArea.setText("");
 		// Host the live room now that the ad is up; applicants who join are pending
 		// until admitted from the Current tab.
-		liveParty.hostParty(passphrase, host, capacity, false);
+		liveParty.hostParty(passphrase, host, party.getActivity(), capacity, false);
 		if (party.isPrivateParty() && party.getInviteCode() != null)
 		{
 			setStatus("Private party created - invite code " + party.getInviteCode() + " (also on Current tab).");

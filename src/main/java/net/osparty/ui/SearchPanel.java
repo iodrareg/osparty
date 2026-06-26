@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -34,6 +35,8 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import javax.swing.event.AncestorEvent;
+import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
@@ -64,13 +67,16 @@ class SearchPanel extends JPanel
 	private final JComboBox<String> lootFilter = new JComboBox<>(new String[]{"Any loot", "FFA", "Split"});
 	private final JCheckBox ironmanFilter = new JCheckBox("Ironman parties only");
 	private final JTextField codeField = new JTextField();
-	private final JButton searchButton = new JButton("Search");
+	private final JButton searchButton = new JButton("Refresh");
 	private final JLabel statusLabel = new JLabel();
 	private final JPanel resultsPanel = new JPanel();
 
 	/** Last raw search results, kept so the filters can re-apply without re-querying. */
 	private List<Party> lastResults;
 	private Activity lastActivity;
+	/** Signature of the currently-rendered cards, to skip rebuilds when nothing changed. */
+	private String renderedSignature;
+	private Timer autoRefreshTimer;
 
 	// Application banner (visible only while applied to a party as a member).
 	private final JPanel applicationPanel = new JPanel();
@@ -132,7 +138,40 @@ class SearchPanel extends JPanel
 		statusLabel.setFont(FontManager.getRunescapeSmallFont());
 		add(statusLabel, BorderLayout.SOUTH);
 
+		searchButton.setToolTipText("Refresh the list for the selected activity");
 		searchButton.addActionListener(e -> search());
+
+		// Selecting a different activity searches it immediately.
+		activityDropdown.addActionListener(e -> search());
+
+		// Auto-refresh the selected activity every 10s while the tab is visible.
+		autoRefreshTimer = new Timer(10_000, e -> {
+			if (isShowing())
+			{
+				search();
+			}
+		});
+		autoRefreshTimer.start();
+
+		// Populate as soon as the Search tab is opened.
+		addAncestorListener(new AncestorListener()
+		{
+			@Override
+			public void ancestorAdded(AncestorEvent event)
+			{
+				search();
+			}
+
+			@Override
+			public void ancestorRemoved(AncestorEvent event)
+			{
+			}
+
+			@Override
+			public void ancestorMoved(AncestorEvent event)
+			{
+			}
+		});
 
 		// React to party changes made elsewhere (e.g. leaving from the Current tab).
 		partyState.addListener(() -> {
@@ -313,11 +352,7 @@ class SearchPanel extends JPanel
 		{
 			tags.add("Ironman only");
 		}
-		String hostTag = AccountTypes.tag(AccountTypes.fromName(party.getHostAccountType()));
-		if (hostTag != null)
-		{
-			tags.add("Host " + hostTag);
-		}
+		// The host's account type is shown as a badge next to their name, not text.
 		return tags.isEmpty() ? null : String.join(", ", tags);
 	}
 
@@ -351,31 +386,17 @@ class SearchPanel extends JPanel
 			return;
 		}
 
-		resultsPanel.removeAll();
-		applyButtons.clear();
-		partiesById.clear();
-		resultsPanel.revalidate();
-		resultsPanel.repaint();
-		setStatus("Searching " + activity.getDisplayName() + "...");
-		searchButton.setEnabled(false);
-
+		// No pre-clear: results stay put until the new ones arrive, so the periodic
+		// auto-refresh doesn't flicker.
 		partyService.searchParties(activity, player,
 			parties -> SwingUtilities.invokeLater(() -> showResults(activity, parties)),
-			error -> SwingUtilities.invokeLater(() -> {
-				searchButton.setEnabled(true);
-				setStatus("Search failed: " + error.getMessage());
-			}));
+			error -> SwingUtilities.invokeLater(() -> setStatus("Refresh failed: " + error.getMessage())));
 	}
 
 	private void showResults(Activity activity, List<Party> parties)
 	{
 		lastActivity = activity;
 		lastResults = parties;
-
-		searchButton.setEnabled(true);
-		resultsPanel.removeAll();
-		applyButtons.clear();
-		partiesById.clear();
 
 		LootRule wantLoot = lootFilterValue();
 		boolean ironOnly = ironmanFilter.isSelected();
@@ -402,6 +423,18 @@ class SearchPanel extends JPanel
 			}
 		}
 
+		// Skip the rebuild (and its flicker) when the visible set is unchanged.
+		String signature = activity.getId() + "|" + signatureOf(visible);
+		if (signature.equals(renderedSignature))
+		{
+			return;
+		}
+		renderedSignature = signature;
+
+		resultsPanel.removeAll();
+		applyButtons.clear();
+		partiesById.clear();
+
 		if (visible.isEmpty())
 		{
 			setStatus("No open " + activity.getDisplayName() + " parties.");
@@ -420,6 +453,18 @@ class SearchPanel extends JPanel
 
 		resultsPanel.revalidate();
 		resultsPanel.repaint();
+	}
+
+	/** A stable signature of the visible parties so unchanged refreshes can no-op. */
+	private static String signatureOf(List<Party> parties)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Party party : parties)
+		{
+			sb.append(party.getId()).append(':').append(party.getSize())
+				.append('/').append(party.getCapacity()).append(';');
+		}
+		return sb.toString();
 	}
 
 	private JPanel buildPartyCard(Activity activity, Party party)
@@ -443,6 +488,12 @@ class SearchPanel extends JPanel
 
 		JLabel host = new JLabel(party.getHost() == null ? "Unknown host" : party.getHost());
 		host.setForeground(ColorScheme.BRAND_ORANGE);
+		ImageIcon hostIcon = AccountIcons.forType(AccountTypes.fromName(party.getHostAccountType()));
+		if (hostIcon != null)
+		{
+			host.setIcon(hostIcon);
+			host.setIconTextGap(4);
+		}
 
 		String capacity = party.getCapacity() > 0
 			? party.getSize() + "/" + party.getCapacity()
@@ -616,7 +667,7 @@ class SearchPanel extends JPanel
 			return;
 		}
 
-		liveParty.joinParty(passphrase);
+		liveParty.joinParty(passphrase, party.getActivity(), party.getCapacity());
 		partyState.setMember(party);
 		setStatus("Joined " + party.getHost() + "'s room - awaiting host approval.");
 		updateAllButtons();

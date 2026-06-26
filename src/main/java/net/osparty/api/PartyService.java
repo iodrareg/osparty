@@ -20,6 +20,9 @@ public interface PartyService
 	/** Fetch a single party (public or private) by its invite code. */
 	void getPartyByCode(String code, Consumer<Party> onSuccess, Consumer<Throwable> onError);
 
+	/** Fetch the ad currently hosted by {@code host}, if any (for rejoin-on-restart). */
+	void getPartyByHost(String host, Consumer<Party> onSuccess, Consumer<Throwable> onError);
+
 	void createParty(PartyRequest partyRequest, Consumer<Party> onSuccess, Consumer<Throwable> onError);
 
 	/** Host keep-alive: tell the bulletin board the advertised party is still live. */

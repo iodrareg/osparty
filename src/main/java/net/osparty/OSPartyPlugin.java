@@ -4,6 +4,7 @@ import net.osparty.api.PartyApiClient;
 import net.osparty.api.PartyService;
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
+import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import net.osparty.party.MemberCommand;
 import net.osparty.party.PartyStateMessage;
@@ -32,6 +33,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
@@ -72,10 +74,16 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private ItemManager itemManager;
 
 	@Inject
+	private SkillIconManager skillIconManager;
+
+	@Inject
 	private LiveParty liveParty;
 
 	@Inject
 	private RuneWatchService runeWatchService;
+
+	@Inject
+	private KillcountService killcountService;
 
 	@Inject
 	private ConfigManager configManager;
@@ -105,6 +113,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private volatile int world;
 	/** Local player's account type, or null when not logged in. */
 	private volatile AccountType accountType;
+	/** Whether we've checked for a resumable hosted party since this login. */
+	private boolean rejoinChecked;
 
 	@Override
 	protected void startUp()
@@ -125,7 +135,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		panel = new OSPartyPanel(partyService, config, this::getPlayerName, this,
 			this::getFriendsChatOwner, this::getCurrentWorld, itemManager, liveParty, runeWatchService,
-			this::getAccountType);
+			this::getAccountType, killcountService, skillIconManager);
 
 		navButton = NavigationButton.builder()
 			.tooltip("OSParty")
@@ -224,6 +234,11 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 			world = 0;
 			accountType = null;
 		}
+		// Re-arm the rejoin check on a real logout (not a world hop).
+		if (event.getGameState() == GameState.LOGIN_SCREEN)
+		{
+			rejoinChecked = false;
+		}
 	}
 
 	@Subscribe
@@ -233,6 +248,13 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		if (local != null && local.getName() != null)
 		{
 			playerName = local.getName();
+		}
+
+		// Once per login: offer to resume a party we were hosting before a restart.
+		if (playerName != null && !rejoinChecked)
+		{
+			rejoinChecked = true;
+			attemptRejoin(playerName);
 		}
 
 		world = client.getWorld();
@@ -294,6 +316,30 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		runeWatchService.refresh();
 	}
 
+	/** Look up an ad still hosted by us (survives a crash/restart for ~the ad TTL). */
+	private void attemptRejoin(String rsn)
+	{
+		if (liveParty.isConnected())
+		{
+			return; // already in a party
+		}
+		apiClient.getPartyByHost(rsn,
+			party -> SwingUtilities.invokeLater(() -> onRejoinFound(party)),
+			error -> { /* no party for this host - normal, nothing to do */ });
+	}
+
+	private void onRejoinFound(Party party)
+	{
+		if (panel == null || party == null)
+		{
+			return;
+		}
+		panel.resumeHostedParty(party);
+		Activity activity = Activity.fromId(party.getActivity());
+		String name = activity != null ? activity.getDisplayName() : party.getActivity();
+		gameMessage("Rejoined your " + name + " party - disband it from the OSParty panel if you're done.");
+	}
+
 	/**
 	 * @return the currently logged in player's name, or {@code null} if not
 	 * logged in. Safe to call from the EDT.
@@ -322,19 +368,26 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	}
 
 	@Override
-	public void onApplicantShown(Applicant applicant, Activity activity)
+	public void setPendingApplicants(java.util.List<Applicant> applicants, Activity activity)
 	{
-		applicantOverlay.setApplicant(applicant, activity);
+		applicantOverlay.setApplicants(applicants, activity);
+	}
 
+	@Override
+	public void announceApplicant(Applicant applicant, Activity activity)
+	{
 		StringBuilder line = new StringBuilder()
 			.append(applicant.getName())
 			.append(" applied to your ").append(activity.getDisplayName())
-			.append(" party (cb ").append(applicant.getCombatLevel())
-			.append(", KC ").append(applicant.getKillCount());
-		if (activity.hasHardMode() && applicant.getHardModeKillCount() >= 0)
+			.append(" party (cb ").append(applicant.getCombatLevel());
+		if (applicant.getKillCount() >= 0)
 		{
-			line.append(", ").append(activity.getHardModeLabel())
-				.append(' ').append(applicant.getHardModeKillCount());
+			line.append(", KC ").append(applicant.getKillCount());
+			if (activity.hasHardMode() && applicant.getHardModeKillCount() >= 0)
+			{
+				line.append(", ").append(activity.getHardModeLabel())
+					.append(' ').append(applicant.getHardModeKillCount());
+			}
 		}
 		line.append("). Accept or decline in the side panel.");
 
@@ -342,9 +395,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	}
 
 	@Override
-	public void onApplicantResolved(Applicant applicant, Activity activity, boolean accepted)
+	public void announceResolved(Applicant applicant, Activity activity, boolean accepted)
 	{
-		applicantOverlay.clear();
 		gameMessage((accepted ? "Accepted " : "Declined ") + applicant.getName()
 			+ " for your " + activity.getDisplayName() + " party.");
 	}

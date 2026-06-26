@@ -1,6 +1,8 @@
 package net.osparty.ui;
 
 import net.osparty.HostApplicationHandler;
+import net.osparty.KillcountService;
+import net.osparty.PersonalBests;
 import net.osparty.api.MockApplicants;
 import net.osparty.api.PartyService;
 import net.osparty.model.AccountTypes;
@@ -17,6 +19,7 @@ import net.osparty.runewatch.RuneWatchCase;
 import net.osparty.runewatch.RuneWatchService;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.image.BufferedImage;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
@@ -30,6 +33,7 @@ import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import net.runelite.api.vars.AccountType;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -40,6 +44,7 @@ import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -48,9 +53,12 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import net.runelite.api.Skill;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
+import net.runelite.client.util.ImageUtil;
 
 /**
  * "Current" tab: the live party the player is in. The roster, statuses and each
@@ -77,6 +85,35 @@ class CurrentPanel extends JPanel
 	private final ItemManager itemManager;
 	private final LiveParty liveParty;
 	private final RuneWatchService runeWatch;
+	private final KillcountService killcounts;
+	private final SkillIconManager skillIcons;
+
+	/** Skills in the in-game skills-tab layout (row-major, 3 columns), total last. */
+	private static final Skill[] SKILL_LAYOUT = {
+		Skill.ATTACK, Skill.HITPOINTS, Skill.MINING,
+		Skill.STRENGTH, Skill.AGILITY, Skill.SMITHING,
+		Skill.DEFENCE, Skill.HERBLORE, Skill.FISHING,
+		Skill.RANGED, Skill.THIEVING, Skill.COOKING,
+		Skill.PRAYER, Skill.CRAFTING, Skill.FIREMAKING,
+		Skill.MAGIC, Skill.FLETCHING, Skill.WOODCUTTING,
+		Skill.RUNECRAFT, Skill.SLAYER, Skill.FARMING,
+		Skill.CONSTRUCTION, Skill.HUNTER, Skill.SAILING,
+	};
+
+	private static final ImageIcon TOTAL_ICON = loadTotalIcon();
+
+	private static ImageIcon loadTotalIcon()
+	{
+		try
+		{
+			BufferedImage img = ImageUtil.loadImageResource(CurrentPanel.class, "/net/osparty/icons/total.png");
+			return new ImageIcon(img.getScaledInstance(18, 16, java.awt.Image.SCALE_SMOOTH));
+		}
+		catch (Exception e)
+		{
+			return null;
+		}
+	}
 
 	private final JPanel content = new JPanel();
 	private final JLabel statusLabel = new JLabel();
@@ -90,7 +127,8 @@ class CurrentPanel extends JPanel
 
 	CurrentPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, PartyState partyState, ItemManager itemManager,
-		LiveParty liveParty, RuneWatchService runeWatch)
+		LiveParty liveParty, RuneWatchService runeWatch, KillcountService killcounts,
+		SkillIconManager skillIcons)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -99,6 +137,8 @@ class CurrentPanel extends JPanel
 		this.itemManager = itemManager;
 		this.liveParty = liveParty;
 		this.runeWatch = runeWatch;
+		this.killcounts = killcounts;
+		this.skillIcons = skillIcons;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -158,6 +198,7 @@ class CurrentPanel extends JPanel
 			expanded.clear();
 			detailTab.clear();
 			notifiedPending.clear();
+			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
 			content.revalidate();
 			content.repaint();
 			return;
@@ -250,13 +291,23 @@ class CurrentPanel extends JPanel
 			boolean anyPending = false;
 			for (RosterMember member : roster)
 			{
-				if (member.getStatus() == Status.PENDING)
+				// Real applicants (someone other than you who has actually synced)
+				// go in their own section below; a data-less ghost is ignored.
+				if (member.getStatus() == Status.PENDING && !member.isLocal())
 				{
-					anyPending = true;
+					if (member.getData() != null)
+					{
+						anyPending = true;
+					}
 					continue;
 				}
 				content.add(buildMemberEntry(party, activity, member, host));
 				content.add(Box.createVerticalStrut(4));
+			}
+
+			if (!host && isLocalPending(roster))
+			{
+				content.add(subLabel("Awaiting host approval..."));
 			}
 
 			if (anyPending && host)
@@ -265,22 +316,23 @@ class CurrentPanel extends JPanel
 				content.add(sectionLabel("Pending applicants"));
 				for (RosterMember member : roster)
 				{
-					if (member.getStatus() == Status.PENDING)
+					if (member.getStatus() == Status.PENDING && !member.isLocal() && member.getData() != null)
 					{
 						content.add(buildMemberEntry(party, activity, member, true));
 						content.add(Box.createVerticalStrut(4));
 					}
 				}
 			}
-			else if (!host && isLocalPending(roster))
-			{
-				content.add(subLabel("Awaiting host approval..."));
-			}
+		}
 
-			if (host && activity != null)
-			{
-				notifyHostOfPending(roster, activity);
-			}
+		// Keep the in-game applicant overlay in sync with the pending list.
+		if (host && roster != null)
+		{
+			updatePendingApplicants(roster, activity);
+		}
+		else
+		{
+			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
 		}
 
 		// Host test tool: inject a fake applicant so Admit/Decline can be exercised
@@ -315,16 +367,47 @@ class CurrentPanel extends JPanel
 		return false;
 	}
 
-	/** Show the host an overlay + chatbox ping the first time each applicant appears. */
-	private void notifyHostOfPending(List<RosterMember> roster, Activity activity)
+	/**
+	 * Push the full pending-applicant list to the in-game overlay (with killcounts
+	 * filled in), and chat-ping each one the first time it appears.
+	 */
+	private void updatePendingApplicants(List<RosterMember> roster, Activity activity)
 	{
+		List<Applicant> pending = new ArrayList<>();
 		for (RosterMember member : roster)
 		{
-			if (member.getStatus() == Status.PENDING && member.getData() != null
-				&& notifiedPending.add(member.getMemberId()))
+			if (member.getStatus() != Status.PENDING || member.getData() == null)
 			{
-				hostApplicationHandler.onApplicantShown(toApplicant(member.getData()), activity);
+				continue;
 			}
+			Applicant applicant = toApplicant(member.getData());
+			fillKillcount(applicant, activity);
+			pending.add(applicant);
+
+			if (notifiedPending.add(member.getMemberId()))
+			{
+				hostApplicationHandler.announceApplicant(applicant, activity);
+			}
+		}
+		hostApplicationHandler.setPendingApplicants(pending, activity);
+	}
+
+	/** Fill an applicant's killcount from the hiscores cache (looking up if needed). */
+	private void fillKillcount(Applicant applicant, Activity activity)
+	{
+		if (applicant.getKillCount() >= 0 || activity == null || applicant.getName() == null)
+		{
+			return; // already known (e.g. mock applicant) or no name/activity
+		}
+		KillcountService.Killcount cached = killcounts.cached(applicant.getName(), activity);
+		if (cached != null)
+		{
+			applicant.setKillCount(cached.killCount);
+			applicant.setHardModeKillCount(cached.hardModeKillCount);
+		}
+		else
+		{
+			killcounts.lookup(applicant.getName(), activity, this::refresh);
 		}
 	}
 
@@ -345,10 +428,10 @@ class CurrentPanel extends JPanel
 
 		String tag = status == Status.HOST ? " (host)" : status == Status.PENDING ? " (pending)" : "";
 		String you = member.isLocal() ? " (you)" : "";
-		String ironTag = ironTag(member);
-		JLabel name = new JLabel(member.getName() + ironTag + tag + you);
+		JLabel name = new JLabel(member.getName() + tag + you);
 		name.setForeground(status == Status.HOST ? ColorScheme.BRAND_ORANGE
 			: status == Status.PENDING ? ColorScheme.PROGRESS_INPROGRESS_COLOR : Color.WHITE);
+		applyAccountIcon(name, member.getData());
 		headerRow.add(name, BorderLayout.CENTER);
 
 		headerRow.addMouseListener(new MouseAdapter()
@@ -514,33 +597,137 @@ class CurrentPanel extends JPanel
 
 	private JPanel buildSkills(Activity activity, Applicant stats)
 	{
+		JPanel panel = new JPanel(new BorderLayout(0, 6));
+		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		// The in-game skills grid (3 columns), each cell a skill icon + level.
+		JPanel grid = new JPanel(new GridLayout(0, 3, 1, 1));
+		grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		Map<String, Integer> levels = stats.getStats();
+		int total = 0;
+		for (Skill skill : SKILL_LAYOUT)
+		{
+			int level = levelOf(levels, skill);
+			total += level;
+			grid.add(skillCell(skill, level));
+		}
+		panel.add(grid, BorderLayout.NORTH);
+
+		// Total level (with icon) below the grid, then combat + KC.
+		JPanel bottom = new JPanel(new BorderLayout(0, 4));
+		bottom.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		bottom.add(totalRow(total), BorderLayout.NORTH);
+		bottom.add(buildCombatAndKc(activity, stats), BorderLayout.CENTER);
+		panel.add(bottom, BorderLayout.CENTER);
+		return panel;
+	}
+
+	private static int levelOf(Map<String, Integer> levels, Skill skill)
+	{
+		if (levels == null)
+		{
+			return 1;
+		}
+		Integer level = levels.get(skill.getName());
+		return level != null ? level : 1;
+	}
+
+	private JPanel skillCell(Skill skill, int level)
+	{
+		JPanel cell = new JPanel(new BorderLayout(2, 0));
+		cell.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		JLabel icon = new JLabel();
+		icon.setToolTipText(skill.getName());
+		try
+		{
+			BufferedImage img = skillIcons.getSkillImage(skill, true);
+			if (img != null)
+			{
+				icon.setIcon(new ImageIcon(img.getScaledInstance(18, 18, java.awt.Image.SCALE_SMOOTH)));
+			}
+		}
+		catch (Exception ignored)
+		{
+			// No icon for this skill (e.g. an unreleased one) - leave it blank.
+		}
+
+		JLabel value = new JLabel(String.valueOf(level));
+		value.setFont(FontManager.getRunescapeSmallFont());
+		value.setForeground(Color.YELLOW);
+
+		cell.add(icon, BorderLayout.WEST);
+		cell.add(value, BorderLayout.CENTER);
+		return cell;
+	}
+
+	private JPanel totalRow(int total)
+	{
+		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		if (TOTAL_ICON != null)
+		{
+			row.add(new JLabel(TOTAL_ICON));
+		}
+		JLabel value = new JLabel("Total level: " + total);
+		value.setForeground(Color.WHITE);
+		value.setFont(FontManager.getRunescapeSmallFont());
+		row.add(value);
+		return row;
+	}
+
+	private JPanel buildCombatAndKc(Activity activity, Applicant stats)
+	{
 		JPanel detail = new JPanel(new GridLayout(0, 2, 6, 2));
 		detail.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		detail.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
 
 		detail.add(detailLeft("Combat"));
 		detail.add(detailRight(String.valueOf(stats.getCombatLevel())));
 
-		if (stats.getStats() != null)
+		// Killcount: live reports carry -1, so fall back to a hiscores lookup by name.
+		int kc = stats.getKillCount();
+		int hardKc = stats.getHardModeKillCount();
+		boolean lookingUp = false;
+		if (kc < 0 && activity != null && stats.getName() != null)
 		{
-			for (Map.Entry<String, Integer> stat : stats.getStats().entrySet())
+			KillcountService.Killcount cached = killcounts.cached(stats.getName(), activity);
+			if (cached != null)
 			{
-				detail.add(detailLeft(stat.getKey()));
-				detail.add(detailRight(String.valueOf(stat.getValue())));
+				kc = cached.killCount;
+				hardKc = cached.hardModeKillCount;
+			}
+			else
+			{
+				killcounts.lookup(stats.getName(), activity, this::refresh);
+				lookingUp = true;
 			}
 		}
 
-		// Killcount is only shown for mock/explicit data; live reports carry -1.
-		if (stats.getKillCount() >= 0)
+		String activityName = activity != null ? activity.getDisplayName() : "Activity";
+		if (kc >= 0)
 		{
-			String activityName = activity != null ? activity.getDisplayName() : "Activity";
 			detail.add(detailLeft(activityName + " KC"));
-			detail.add(detailRight(String.valueOf(stats.getKillCount())));
+			detail.add(detailRight(String.valueOf(kc)));
 
-			if (activity != null && activity.hasHardMode() && stats.getHardModeKillCount() >= 0)
+			if (activity != null && activity.hasHardMode() && hardKc >= 0)
 			{
 				detail.add(detailLeft(activity.getHardModeLabel() + " KC"));
-				detail.add(detailRight(String.valueOf(stats.getHardModeKillCount())));
+				detail.add(detailRight(String.valueOf(hardKc)));
 			}
+		}
+		else if (lookingUp)
+		{
+			detail.add(detailLeft(activityName + " KC"));
+			detail.add(detailRight("looking up..."));
+		}
+
+		// Personal best (broadcast by the applicant's own client) for timed activities.
+		if (activity != null && PersonalBests.isPbActivity(activity.getId()))
+		{
+			detail.add(detailLeft(activityName + " PB"));
+			detail.add(detailRight(stats.getPbSeconds() >= 0
+				? PersonalBests.format(stats.getPbSeconds()) : "n/a"));
 		}
 
 		return detail;
@@ -642,6 +829,7 @@ class CurrentPanel extends JPanel
 		applicant.setInventory(update.getInventory());
 		applicant.setKillCount(update.getKillCount());
 		applicant.setHardModeKillCount(update.getHardModeKillCount());
+		applicant.setPbSeconds(update.getPbSeconds());
 		return applicant;
 	}
 
@@ -672,7 +860,7 @@ class CurrentPanel extends JPanel
 		notifiedPending.remove(member.getMemberId());
 		if (activity != null && member.getData() != null)
 		{
-			hostApplicationHandler.onApplicantResolved(toApplicant(member.getData()), activity, true);
+			hostApplicationHandler.announceResolved(toApplicant(member.getData()), activity, true);
 		}
 		setStatus("Admitted " + member.getName() + ".");
 		refresh();
@@ -684,7 +872,7 @@ class CurrentPanel extends JPanel
 		notifiedPending.remove(member.getMemberId());
 		if (activity != null && member.getData() != null)
 		{
-			hostApplicationHandler.onApplicantResolved(toApplicant(member.getData()), activity, false);
+			hostApplicationHandler.announceResolved(toApplicant(member.getData()), activity, false);
 		}
 		setStatus("Declined " + member.getName() + ".");
 		refresh();
@@ -772,15 +960,40 @@ class CurrentPanel extends JPanel
 		return button;
 	}
 
-	/** Account-type suffix for the roster name (e.g. " [HCIM]"), or "" for a main/unknown. */
-	private String ironTag(RosterMember member)
+	/** Put the player's ironman badge (if any) before their name. */
+	private void applyAccountIcon(JLabel label, PlayerUpdate data)
 	{
-		if (member.getData() == null)
+		if (data == null)
 		{
-			return "";
+			return;
 		}
-		String tag = AccountTypes.tag(AccountTypes.fromName(member.getData().getAccountType()));
-		return tag == null ? "" : " [" + tag + "]";
+		AccountType type = AccountTypes.fromName(data.getAccountType());
+		ImageIcon icon = AccountIcons.forType(type);
+		if (icon != null)
+		{
+			label.setIcon(icon);
+			label.setIconTextGap(4);
+			label.setToolTipText(accountTypeName(type));
+		}
+	}
+
+	private static String accountTypeName(AccountType type)
+	{
+		switch (type)
+		{
+			case IRONMAN:
+				return "Ironman";
+			case HARDCORE_IRONMAN:
+				return "Hardcore Ironman";
+			case ULTIMATE_IRONMAN:
+				return "Ultimate Ironman";
+			case GROUP_IRONMAN:
+				return "Group Ironman";
+			case HARDCORE_GROUP_IRONMAN:
+				return "Hardcore Group Ironman";
+			default:
+				return "Ironman";
+		}
 	}
 
 	/** A generic red warning badge (e.g. for a non-ironman in an ironman-only party). */

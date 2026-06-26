@@ -24,6 +24,13 @@ public final class MockApplicants
 		"Cabbage King", "Gim Goblin", "Pure Pete", "Tick Manipoo", "Splashy Sam",
 	};
 
+	/** Non-combat skills, to round out the mock applicant's skills tab. */
+	private static final String[] OTHER_SKILLS = {
+		"Runecraft", "Construction", "Agility", "Herblore", "Thieving", "Crafting",
+		"Fletching", "Slayer", "Hunter", "Mining", "Smithing", "Fishing", "Cooking",
+		"Firemaking", "Woodcutting", "Farming",
+	};
+
 	private MockApplicants()
 	{
 	}
@@ -48,6 +55,11 @@ public final class MockApplicants
 		stats.put("Ranged", ranged);
 		stats.put("Magic", magic);
 		stats.put("Prayer", prayer);
+		// Fill the rest of the skills so the inspection's skills tab looks complete.
+		for (String skill : OTHER_SKILLS)
+		{
+			stats.put(skill, rng.nextInt(70, 100));
+		}
 
 		Applicant applicant = new Applicant();
 		applicant.setName(NAMES[rng.nextInt(NAMES.length)]);
@@ -55,6 +67,9 @@ public final class MockApplicants
 		applicant.setCombatLevel(combatLevel(attack, strength, defence, hitpoints, ranged, magic, prayer));
 		applicant.setKillCount(rng.nextInt(5, 1200));
 		applicant.setHardModeKillCount(activity.hasHardMode() ? rng.nextInt(0, 400) : -1);
+		// A plausible raid/boss PB (seconds) for timed activities, else unknown.
+		applicant.setPbSeconds(net.osparty.PersonalBests.isPbActivity(activity.getId())
+			? rng.nextInt(120, 600) + rng.nextInt(0, 10) / 10.0 : -1);
 
 		Loadout loadout = Loadout.values()[rng.nextInt(Loadout.values().length)];
 		applicant.setEquipment(loadout.equipment());

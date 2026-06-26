@@ -2,17 +2,21 @@ package net.osparty;
 
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
+import java.util.List;
 
 /**
- * Lets the host-facing UI hand an incoming application to the plugin, which
- * mirrors it in-game (chatbox message + stats/killcount overlay) and clears it
- * once the host accepts or declines.
+ * Lets the host-facing UI mirror incoming applications in-game: an overlay
+ * listing every pending applicant, and one-off chatbox pings as they arrive or
+ * are resolved.
  */
 public interface HostApplicationHandler
 {
-	/** A new applicant arrived for a party the player is hosting. */
-	void onApplicantShown(Applicant applicant, Activity activity);
+	/** Replace the in-game overlay with the current set of pending applicants. */
+	void setPendingApplicants(List<Applicant> applicants, Activity activity);
 
-	/** The host accepted or declined the current applicant. */
-	void onApplicantResolved(Applicant applicant, Activity activity, boolean accepted);
+	/** Chatbox ping for a newly-arrived applicant. */
+	void announceApplicant(Applicant applicant, Activity activity);
+
+	/** Chatbox ping after the host accepts or declines an applicant. */
+	void announceResolved(Applicant applicant, Activity activity, boolean accepted);
 }

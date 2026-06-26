@@ -5,20 +5,22 @@ import net.osparty.model.Applicant;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
 /**
- * In-game overlay mimicking the host's view of an incoming applicant: their
- * combat stats and killcount for the activity (and its harder variant). Shown
- * while an application is pending; renders nothing otherwise.
+ * In-game overlay listing every applicant pending for the party the host is
+ * running — name, combat level and activity killcount each. Renders nothing
+ * when there are none. Inspect full gear/stats and Admit/Decline in the side
+ * panel.
  */
 public class ApplicantOverlay extends OverlayPanel
 {
-	private volatile Applicant applicant;
+	private volatile List<Applicant> applicants = new ArrayList<>();
 	private volatile Activity activity;
 
 	public ApplicantOverlay()
@@ -26,65 +28,57 @@ public class ApplicantOverlay extends OverlayPanel
 		setPosition(OverlayPosition.TOP_LEFT);
 	}
 
-	public void setApplicant(Applicant applicant, Activity activity)
+	public void setApplicants(List<Applicant> applicants, Activity activity)
 	{
-		this.applicant = applicant;
+		this.applicants = applicants == null ? new ArrayList<>() : new ArrayList<>(applicants);
 		this.activity = activity;
 	}
 
 	public void clear()
 	{
-		this.applicant = null;
+		this.applicants = new ArrayList<>();
 		this.activity = null;
 	}
 
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		Applicant a = applicant;
+		List<Applicant> list = applicants;
 		Activity act = activity;
-		if (a == null || act == null)
+		if (list.isEmpty() || act == null)
 		{
 			return null;
 		}
 
 		panelComponent.getChildren().clear();
-		panelComponent.setPreferredSize(new Dimension(150, 0));
+		panelComponent.setPreferredSize(new Dimension(160, 0));
 
 		panelComponent.getChildren().add(TitleComponent.builder()
-			.text("Party applicant")
+			.text("Applicants (" + list.size() + ")")
 			.color(Color.ORANGE)
 			.build());
 
-		panelComponent.getChildren().add(LineComponent.builder()
-			.left(a.getName())
-			.right("cb " + a.getCombatLevel())
-			.build());
-
-		if (a.getStats() != null)
-		{
-			for (Map.Entry<String, Integer> stat : a.getStats().entrySet())
-			{
-				panelComponent.getChildren().add(LineComponent.builder()
-					.left(stat.getKey())
-					.right(String.valueOf(stat.getValue()))
-					.build());
-			}
-		}
-
-		panelComponent.getChildren().add(LineComponent.builder()
-			.left(act.getDisplayName() + " KC")
-			.right(String.valueOf(a.getKillCount()))
-			.rightColor(Color.GREEN)
-			.build());
-
-		if (act.hasHardMode() && a.getHardModeKillCount() >= 0)
+		for (Applicant a : list)
 		{
 			panelComponent.getChildren().add(LineComponent.builder()
-				.left(act.getHardModeLabel() + " KC")
-				.right(String.valueOf(a.getHardModeKillCount()))
-				.rightColor(Color.GREEN)
+				.left(a.getName())
+				.right("cb " + a.getCombatLevel())
 				.build());
+
+			if (a.getKillCount() >= 0)
+			{
+				String kc = act.getDisplayName() + " KC";
+				String value = String.valueOf(a.getKillCount());
+				if (act.hasHardMode() && a.getHardModeKillCount() >= 0)
+				{
+					value += " (" + act.getHardModeLabel() + " " + a.getHardModeKillCount() + ")";
+				}
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left(kc)
+					.right(value)
+					.rightColor(Color.GREEN)
+					.build());
+			}
 		}
 
 		return super.render(graphics);

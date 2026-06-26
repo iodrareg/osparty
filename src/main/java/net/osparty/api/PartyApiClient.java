@@ -97,6 +97,22 @@ public class PartyApiClient implements PartyService
 	}
 
 	/**
+	 * Fetch the ad currently hosted by a player (used to rejoin after a restart).
+	 */
+	@Override
+	public void getPartyByHost(String host, Consumer<Party> onSuccess, Consumer<Throwable> onError)
+	{
+		HttpUrl url = baseUrl()
+			.addPathSegment("parties")
+			.addPathSegment("by-host")
+			.addPathSegment(host)
+			.build();
+
+		Request request = new Request.Builder().url(url).get().build();
+		enqueue(request, Party.class, onSuccess, onError);
+	}
+
+	/**
 	 * Create a new party hosted by the logged in player and enter the queue.
 	 */
 	@Override
