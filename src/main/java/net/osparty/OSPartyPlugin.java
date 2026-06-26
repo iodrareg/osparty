@@ -427,7 +427,17 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 			rsWorld.setPlayerCount(target.getPlayers());
 			rsWorld.setLocation(target.getLocation());
 			rsWorld.setTypes(WorldUtil.toWorldTypes(target.getTypes()));
-			client.changeWorld(rsWorld);
+
+			// changeWorld() only takes effect at the login screen; while logged in
+			// we must hopToWorld() to actually perform the in-game world hop.
+			if (client.getGameState() == GameState.LOGIN_SCREEN)
+			{
+				client.changeWorld(rsWorld);
+			}
+			else
+			{
+				client.hopToWorld(rsWorld);
+			}
 		});
 	}
 

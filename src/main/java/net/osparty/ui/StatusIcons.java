@@ -17,6 +17,8 @@ final class StatusIcons
 {
 	static final ImageIcon CHECK = new ImageIcon(check());
 	static final ImageIcon CROSS = new ImageIcon(cross());
+	static final ImageIcon CHEVRON_DOWN = new ImageIcon(chevron(true));
+	static final ImageIcon CHEVRON_UP = new ImageIcon(chevron(false));
 
 	private static final int SIZE = 14;
 
@@ -46,6 +48,28 @@ final class StatusIcons
 		g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 		g.drawLine(3, 3, 11, 11);
 		g.drawLine(11, 3, 3, 11);
+		g.dispose();
+		return img;
+	}
+
+	/** A small chevron pointing down (collapsed) or up (expanded). */
+	private static BufferedImage chevron(boolean down)
+	{
+		BufferedImage img = base();
+		Graphics2D g = img.createGraphics();
+		hints(g);
+		g.setColor(new Color(0xA0, 0xA0, 0xA0));
+		g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		if (down)
+		{
+			g.drawLine(3, 5, 7, 9);
+			g.drawLine(7, 9, 11, 5);
+		}
+		else
+		{
+			g.drawLine(3, 9, 7, 5);
+			g.drawLine(7, 5, 11, 9);
+		}
 		g.dispose();
 		return img;
 	}

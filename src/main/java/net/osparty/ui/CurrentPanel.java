@@ -296,8 +296,9 @@ class CurrentPanel extends JPanel
 		}
 		else
 		{
-			// The friends chat the host is in (if any); used to flag who has joined it.
-			String hostFc = hostFriendsChat(roster, host);
+			// "In the friends chat" means the host's own friends chat (owned by the
+			// host), identified by the host's name — not just any chat they're in.
+			String hostName = party.getHost();
 			boolean anyPending = false;
 			for (RosterMember member : roster)
 			{
@@ -311,7 +312,7 @@ class CurrentPanel extends JPanel
 					}
 					continue;
 				}
-				content.add(buildMemberEntry(party, activity, member, host, hostFc));
+				content.add(buildMemberEntry(party, activity, member, host, hostName));
 				content.add(Box.createVerticalStrut(4));
 			}
 
@@ -328,7 +329,7 @@ class CurrentPanel extends JPanel
 				{
 					if (member.getStatus() == Status.PENDING && !member.isLocal() && member.getData() != null)
 					{
-						content.add(buildMemberEntry(party, activity, member, true, hostFc));
+						content.add(buildMemberEntry(party, activity, member, true, hostName));
 						content.add(Box.createVerticalStrut(4));
 					}
 				}
@@ -409,7 +410,7 @@ class CurrentPanel extends JPanel
 	}
 
 	private JPanel buildMemberEntry(Party party, Activity activity, RosterMember member, boolean host,
-		String hostFc)
+		String hostName)
 	{
 		Status status = member.getStatus();
 		boolean isExpanded = expanded.contains(member.getMemberId());
@@ -419,78 +420,61 @@ class CurrentPanel extends JPanel
 		entry.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
 		entry.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-		JPanel headerRow = new JPanel(new BorderLayout(6, 0));
-		headerRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		headerRow.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		headerRow.setToolTipText("Click to inspect gear & stats");
+		// A vertical stack of lines:
+		//   1. name
+		//   2. world  friends-chat indicator
+		//   3. action buttons (Admit/Decline/Kick, Hop to, Request FC)
+		//   4. expand/collapse chevron
+		JPanel stack = new JPanel();
+		stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
+		stack.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
+		// Line 1: name (click it - or the chevron - to inspect gear & stats).
 		String tag = status == Status.HOST ? " (host)" : status == Status.PENDING ? " (pending)" : "";
 		String you = member.isLocal() ? " (you)" : "";
 		JLabel name = new JLabel(member.getName() + tag + you);
 		name.setForeground(status == Status.HOST ? ColorScheme.BRAND_ORANGE
 			: status == Status.PENDING ? ColorScheme.PROGRESS_INPROGRESS_COLOR : Color.WHITE);
 		applyAccountIcon(name, member.getData());
-		headerRow.add(name, BorderLayout.CENTER);
+		name.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		name.setToolTipText("Click to inspect gear & stats");
+		name.addMouseListener(expandOnClick(member));
+		addLine(stack, name, 0);
 
-		headerRow.addMouseListener(new MouseAdapter()
-		{
-			@Override
-			public void mousePressed(MouseEvent e)
-			{
-				if (isExpanded)
-				{
-					expanded.remove(member.getMemberId());
-				}
-				else
-				{
-					expanded.add(member.getMemberId());
-				}
-				refresh();
-			}
-		});
-
-		// Name on top, then a world / friends-chat meta row and optional warnings
-		// (RuneWatch / non-ironman), and the action buttons on their own row below.
-		JPanel top = new JPanel(new BorderLayout(0, 4));
-		top.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		top.add(headerRow, BorderLayout.NORTH);
-
-		JPanel infoStack = new JPanel();
-		infoStack.setLayout(new BoxLayout(infoStack, BoxLayout.Y_AXIS));
-		infoStack.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-
-		JComponent meta = buildMemberMeta(member, host, hostFc);
+		// Line 2: world + friends-chat indicator.
+		JComponent meta = buildMemberMeta(member, hostName);
 		if (meta != null)
 		{
-			meta.setAlignmentX(Component.LEFT_ALIGNMENT);
-			infoStack.add(meta);
+			addLine(stack, meta, 16);
 		}
 
+		// Warnings (RuneWatch / non-ironman) - each already self-indents.
 		RuneWatchCase flagged = runeWatch.get(member.getName());
 		if (flagged != null)
 		{
-			JComponent badge = runeWatchBadge(flagged);
-			badge.setAlignmentX(Component.LEFT_ALIGNMENT);
-			infoStack.add(badge);
+			addLine(stack, runeWatchBadge(flagged), 0);
 		}
 		if (party.isIronmanOnly() && status != Status.HOST && member.getData() != null
 			&& !AccountTypes.isIronman(AccountTypes.fromName(member.getData().getAccountType())))
 		{
-			JComponent badge = warnBadge("Not an ironman");
-			badge.setAlignmentX(Component.LEFT_ALIGNMENT);
-			infoStack.add(badge);
-		}
-		if (infoStack.getComponentCount() > 0)
-		{
-			top.add(infoStack, BorderLayout.CENTER);
+			addLine(stack, warnBadge("Not an ironman"), 0);
 		}
 
-		JComponent actions = buildMemberActions(activity, member, host);
+		// Line 3: action buttons.
+		JComponent actions = buildActionsRow(activity, member, host, hostName);
 		if (actions != null)
 		{
-			top.add(actions, BorderLayout.SOUTH);
+			addLine(stack, actions, 16);
 		}
-		entry.add(top, BorderLayout.NORTH);
+
+		// Line 4: expand/collapse chevron (mirrors clicking the name).
+		JLabel chevron = new JLabel(isExpanded ? StatusIcons.CHEVRON_UP : StatusIcons.CHEVRON_DOWN);
+		chevron.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		chevron.setToolTipText(isExpanded ? "Hide gear & stats" : "Show gear & stats");
+		chevron.addMouseListener(expandOnClick(member));
+		addLine(stack, chevron, 16);
+
+		entry.add(stack, BorderLayout.NORTH);
 
 		if (isExpanded)
 		{
@@ -500,20 +484,49 @@ class CurrentPanel extends JPanel
 		return entry;
 	}
 
-	/** Host controls: Admit/Decline for pending applicants, Kick for admitted members. */
-	private JComponent buildMemberActions(Activity activity, RosterMember member, boolean host)
+	/** Add one left-aligned, height-capped line to a vertical BoxLayout stack. */
+	private void addLine(JPanel stack, JComponent content, int indent)
 	{
-		if (!host || member.isLocal())
+		JPanel row = cappedPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+		row.setBorder(BorderFactory.createEmptyBorder(0, indent, 2, 0));
+		row.add(content);
+		stack.add(row);
+	}
+
+	/** A click handler that toggles a member's expanded inspection view. */
+	private MouseAdapter expandOnClick(RosterMember member)
+	{
+		return new MouseAdapter()
 		{
-			return null;
+			@Override
+			public void mousePressed(MouseEvent e)
+			{
+				long id = member.getMemberId();
+				if (!expanded.remove(id))
+				{
+					expanded.add(id);
+				}
+				refresh();
+			}
+		};
+	}
+
+	/** Host/member action buttons: Admit/Decline/Kick, Hop to, and Request FC. */
+	private JComponent buildActionsRow(Activity activity, RosterMember member, boolean host, String hostName)
+	{
+		if (member.isLocal())
+		{
+			return null; // no actions on yourself
 		}
 
-		// Left-aligned and indented to sit under the name (past the caret).
 		JPanel wrap = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
 		wrap.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		wrap.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+		boolean any = false;
 
-		if (member.getStatus() == Status.PENDING)
+		// Host membership controls.
+		if (host && member.getStatus() == Status.PENDING)
 		{
 			JButton admit = smallButton("Admit");
 			admit.addActionListener(e -> admit(activity, member));
@@ -521,36 +534,63 @@ class CurrentPanel extends JPanel
 			decline.addActionListener(e -> decline(activity, member));
 			wrap.add(admit);
 			wrap.add(decline);
+			any = true;
 		}
-		else if (member.getStatus() == Status.MEMBER)
+		else if (host && member.getStatus() == Status.MEMBER)
 		{
 			JButton kick = smallButton("Kick");
 			kick.addActionListener(e -> kick(activity, member));
 			wrap.add(kick);
+			any = true;
 		}
-		else
+
+		// Hop to the member's world (any viewer) when it differs from ours.
+		PlayerUpdate data = member.getData();
+		int world = data != null ? data.getWorld() : 0;
+		int mine = currentWorld.getAsInt();
+		if (world > 0 && mine > 0 && mine != world)
 		{
-			return null;
+			JButton hop = smallButton("Hop to");
+			hop.setToolTipText("Hop to world " + world);
+			hop.addActionListener(e -> {
+				worldHopper.accept(world);
+				setStatus("Hopping to world " + world + "...");
+			});
+			wrap.add(hop);
+			any = true;
 		}
-		return wrap;
+
+		// Host can ask a member who isn't in the host's own friends chat to join it,
+		// but only when the host actually has their own chat open.
+		if (host && data != null && hostName != null
+			&& !sameRsn(data.getFriendsChatOwner(), hostName)
+			&& sameRsn(friendsChatOwnerSupplier.get(), hostName))
+		{
+			JButton request = smallButton("Request FC");
+			request.setToolTipText("Ask " + member.getName() + " to join your friends chat");
+			request.addActionListener(e -> requestFc(member, hostName));
+			wrap.add(request);
+			any = true;
+		}
+
+		return any ? wrap : null;
 	}
 
 	/**
-	 * The world / friends-chat row under a member's name: their world (with a Hop
-	 * button when it differs from ours), and a check/cross showing whether they're
-	 * in the host's friends chat (with a host-only "Request FC" nudge when not).
+	 * The world / friends-chat indicator row: the member's world, and a check/cross
+	 * showing whether they're in the <b>host's own</b> friends chat (the chat owned
+	 * by the host, matched on the host's name). Buttons live on the actions row.
 	 * @return the row, or {@code null} when there's nothing to show.
 	 */
-	private JComponent buildMemberMeta(RosterMember member, boolean host, String hostFc)
+	private JComponent buildMemberMeta(RosterMember member, String hostName)
 	{
 		PlayerUpdate data = member.getData();
 		int world = data != null ? data.getWorld() : 0;
-		boolean showFc = hostFc != null && data != null;
-		boolean inFc = showFc && hostFc.equalsIgnoreCase(nz(data.getFriendsChatOwner()));
+		boolean showFc = hostName != null && data != null;
+		boolean inFc = showFc && sameRsn(data.getFriendsChatOwner(), hostName);
 
 		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		row.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
 		boolean any = false;
 
 		if (world > 0)
@@ -560,62 +600,31 @@ class CurrentPanel extends JPanel
 			worldLabel.setFont(FontManager.getRunescapeSmallFont());
 			row.add(worldLabel);
 			any = true;
-
-			int mine = currentWorld.getAsInt();
-			if (mine > 0 && mine != world)
-			{
-				JButton hop = smallButton("Hop to");
-				hop.setToolTipText("Hop to world " + world);
-				hop.addActionListener(e -> {
-					worldHopper.accept(world);
-					setStatus("Hopping to world " + world + "...");
-				});
-				row.add(hop);
-			}
 		}
 
 		if (showFc)
 		{
 			JLabel fcIcon = new JLabel(inFc ? StatusIcons.CHECK : StatusIcons.CROSS);
-			fcIcon.setToolTipText(inFc ? "In the host's friends chat" : "Not in the host's friends chat");
+			fcIcon.setToolTipText(inFc
+				? "In " + hostName + "'s friends chat"
+				: "Not in " + hostName + "'s friends chat");
 			row.add(fcIcon);
 			any = true;
-
-			// Host can nudge a member who hasn't joined the friends chat yet.
-			if (host && !member.isLocal() && !inFc)
-			{
-				JButton request = smallButton("Request FC");
-				request.setToolTipText("Ask " + member.getName() + " to join your friends chat");
-				request.addActionListener(e -> requestFc(member, hostFc));
-				row.add(request);
-			}
 		}
 
 		return any ? row : null;
 	}
 
-	/** The friends chat the host is in, or {@code null} if the host isn't in one. */
-	private String hostFriendsChat(List<RosterMember> roster, boolean host)
+	/** True if two RuneScape names refer to the same account (case- and space-insensitive). */
+	private static boolean sameRsn(String a, String b)
 	{
-		if (host)
-		{
-			String own = friendsChatOwnerSupplier.get();
-			return own == null || own.isEmpty() ? null : own;
-		}
-		for (RosterMember member : roster)
-		{
-			if (member.getStatus() == Status.HOST && member.getData() != null)
-			{
-				String fc = member.getData().getFriendsChatOwner();
-				return fc == null || fc.isEmpty() ? null : fc;
-			}
-		}
-		return null;
+		return a != null && b != null && norm(a).equalsIgnoreCase(norm(b));
 	}
 
-	private static String nz(String value)
+	/** Normalise an RSN for comparison: non-breaking spaces to spaces, trimmed. */
+	private static String norm(String name)
 	{
-		return value == null ? "" : value;
+		return name.replace(' ', ' ').trim();
 	}
 
 	/**
