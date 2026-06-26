@@ -37,6 +37,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.api.World;
 import net.runelite.api.widgets.ComponentID;
+import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
@@ -106,6 +107,9 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 	@Inject
 	private ChatboxPanelManager chatboxPanelManager;
+
+	@Inject
+	private AudioPlayer audioPlayer;
 
 	@Inject
 	private OSPartyConfig config;
@@ -744,43 +748,14 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	/** Play a bundled .wav sound resource (e.g. /net/osparty/sounds/kicked.wav). */
 	private void playResourceSound(String resource)
 	{
-		new Thread(() -> {
-			try (java.io.InputStream raw = getClass().getResourceAsStream(resource))
-			{
-				if (raw == null)
-				{
-					log.warn("OSParty: sound resource not found '{}'", resource);
-					return;
-				}
-				try (javax.sound.sampled.AudioInputStream in =
-					javax.sound.sampled.AudioSystem.getAudioInputStream(new java.io.BufferedInputStream(raw)))
-				{
-					playClip(in);
-				}
-			}
-			catch (Exception e)
-			{
-				log.warn("OSParty: failed to play sound '{}'", resource, e);
-			}
-		}, "osparty-sound").start();
-	}
-
-	/**
-	 * Open and start a clip for the given stream. {@code Clip.open} buffers all the
-	 * audio, so the caller may close the source stream afterwards; the line listener
-	 * frees the clip once playback finishes.
-	 */
-	private void playClip(javax.sound.sampled.AudioInputStream in) throws Exception
-	{
-		javax.sound.sampled.Clip clip = javax.sound.sampled.AudioSystem.getClip();
-		clip.addLineListener(event -> {
-			if (event.getType() == javax.sound.sampled.LineEvent.Type.STOP)
-			{
-				clip.close();
-			}
-		});
-		clip.open(in);
-		clip.start();
+		try
+		{
+			audioPlayer.play(getClass(), resource, 0f);
+		}
+		catch (Exception e)
+		{
+			log.warn("OSParty: failed to play sound '{}'", resource, e);
+		}
 	}
 
 	/**
