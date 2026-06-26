@@ -154,6 +154,9 @@ class SearchPanel extends JPanel
 			}
 		};
 		controls.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		// Match the other north children's alignment — a mixed BoxLayout alignmentX
+		// pushes the LEFT-aligned panels (filters, join row) to the right.
+		controls.setAlignmentX(Component.LEFT_ALIGNMENT);
 
 		JLabel label = new JLabel("Activity");
 		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
