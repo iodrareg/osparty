@@ -6,6 +6,7 @@ import net.osparty.model.AccountTypes;
 import net.osparty.model.Activity;
 import net.osparty.model.LootRule;
 import net.osparty.model.Party;
+import net.osparty.model.Role;
 import net.osparty.party.LiveParty;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -36,6 +37,7 @@ import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
@@ -80,6 +82,9 @@ class SearchPanel extends JPanel
 	/** Checkbox list of activities to include; all selected by default. */
 	private final JPanel activityListPanel = new JPanel();
 	private final Set<Activity> selectedActivities = EnumSet.allOf(Activity.class);
+	/** Roles the player is willing to fill; empty = no role constraint (show all). */
+	private final Set<Role> selectedRoles = EnumSet.noneOf(Role.class);
+	private final JPanel roleListPanel = new JPanel();
 	/** The activity we're currently standing near (floated to the top, pre-checked). */
 	private Activity recommended;
 	/** Free-text filter over host name / description / activity. */
@@ -132,6 +137,7 @@ class SearchPanel extends JPanel
 		north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
 		north.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		north.add(buildActivityFilter());
+		north.add(buildRoleFilter());
 		north.add(buildTextFilter());
 		north.add(buildControls());
 		north.add(buildFilters());
@@ -259,6 +265,139 @@ class SearchPanel extends JPanel
 		scroll.setPreferredSize(new Dimension(10, 120));
 		panel.add(scroll, BorderLayout.CENTER);
 		return panel;
+	}
+
+	/**
+	 * The role multiselect (ToB/CoX): tick the roles you're willing to fill. With
+	 * none ticked there's no role constraint; ticking some hides role parties that
+	 * don't still need any of them. "Fill / Any" matches any party with open roles.
+	 */
+	private JPanel buildRoleFilter()
+	{
+		JPanel panel = cappedRow(new BorderLayout(0, 4));
+		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+
+		JLabel label = new JLabel("Roles I can fill");
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		panel.add(label, BorderLayout.NORTH);
+
+		// Two compact columns side by side - one per role-based activity - so a
+		// Theatre of Blood pick can't be confused with a Chambers of Xeric one.
+		roleListPanel.setLayout(new GridLayout(1, 2, 6, 0));
+		roleListPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		roleListPanel.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		roleListPanel.removeAll();
+		roleListPanel.add(buildRoleBox(Activity.THEATRE_OF_BLOOD, "ToB"));
+		roleListPanel.add(buildRoleBox(Activity.CHAMBERS_OF_XERIC, "CoX"));
+
+		panel.add(roleListPanel, BorderLayout.CENTER);
+		return panel;
+	}
+
+	/** A compact, titled checkbox column for one activity's selectable filter roles. */
+	private JPanel buildRoleBox(Activity activity, String title)
+	{
+		JPanel box = new JPanel();
+		box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+		box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		box.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(4, 6, 4, 4)));
+
+		JLabel header = new JLabel(title);
+		header.setForeground(ColorScheme.BRAND_ORANGE);
+		header.setFont(FontManager.getRunescapeBoldFont());
+		header.setAlignmentX(Component.LEFT_ALIGNMENT);
+		header.setBorder(BorderFactory.createEmptyBorder(0, 0, 3, 0));
+		box.add(header);
+
+		for (Role role : activity.filterRoles())
+		{
+			JCheckBox check = new JCheckBox(role.getDisplayName());
+			check.setSelected(selectedRoles.contains(role));
+			check.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			check.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			check.setFont(FontManager.getRunescapeSmallFont());
+			check.setFocusPainted(false);
+			check.setMargin(new Insets(0, 0, 0, 0));
+			check.setIconTextGap(4);
+			check.setBorder(BorderFactory.createEmptyBorder(1, 0, 1, 0));
+			check.setAlignmentX(Component.LEFT_ALIGNMENT);
+			check.addActionListener(e -> {
+				if (check.isSelected())
+				{
+					selectedRoles.add(role);
+				}
+				else
+				{
+					selectedRoles.remove(role);
+				}
+				reapplyFilters();
+			});
+			box.add(check);
+		}
+		return box;
+	}
+
+	/**
+	 * Whether a party passes the role filter. Non-role parties always pass. Each
+	 * activity's box is independent: with nothing ticked in that box, parties of
+	 * that activity pass. Otherwise the party must still need one of the ticked
+	 * roles - with "Fill / Any" meaning "I'll do any role", and a party's own Fill
+	 * slot accepting anyone.
+	 */
+	private boolean matchesRoleFilter(Party party, Activity activity)
+	{
+		if (activity == null || !activity.hasRoles())
+		{
+			return true;
+		}
+		// Only consider ticks that belong to this activity's box.
+		Set<Role> picked = EnumSet.noneOf(Role.class);
+		for (Role role : activity.filterRoles())
+		{
+			if (selectedRoles.contains(role))
+			{
+				picked.add(role);
+			}
+		}
+		if (picked.isEmpty())
+		{
+			return true; // this activity's box is unconstrained
+		}
+		List<String> needed = neededRolesOf(party);
+		if (needed == null || needed.isEmpty())
+		{
+			return true; // no role info on the ad - don't over-filter
+		}
+		Role any = activity.anyRole();
+		if (any != null && picked.contains(any))
+		{
+			return true; // "I'll do any role"
+		}
+		if (needed.contains(Role.COX_FILL.getId()))
+		{
+			return true; // an advertised Fill slot accepts anyone
+		}
+		for (Role role : picked)
+		{
+			if (needed.contains(role.getId()))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** The roles still open on an ad: the live {@code neededRoles}, else the full comp. */
+	private static List<String> neededRolesOf(Party party)
+	{
+		if (party.getNeededRoles() != null && !party.getNeededRoles().isEmpty())
+		{
+			return party.getNeededRoles();
+		}
+		return party.getRequiredRoles();
 	}
 
 	/** A free-text filter over host name, description and activity. */
@@ -501,8 +640,21 @@ class SearchPanel extends JPanel
 			setStatus("You don't meet that party's minimum killcount.");
 			return;
 		}
+
+		Activity activity = Activity.fromId(party.getActivity());
+		String role = null;
+		if (activity != null && activity.hasRoles())
+		{
+			role = promptForRole(party, activity);
+			if (role == null)
+			{
+				return; // cancelled the role dialog
+			}
+		}
+
 		codeField.setText("");
-		leaveCurrentThen(() -> doApply(party));
+		final String chosenRole = role;
+		leaveCurrentThen(() -> doApply(party, chosenRole));
 	}
 
 	/** Whether the local account satisfies a party's ironman-only requirement. */
@@ -624,6 +776,10 @@ class SearchPanel extends JPanel
 				{
 					continue;
 				}
+				if (!matchesRoleFilter(party, act))
+				{
+					continue;
+				}
 				if (!text.isEmpty() && !matchesText(party, act, text))
 				{
 					continue;
@@ -633,7 +789,7 @@ class SearchPanel extends JPanel
 		}
 
 		// Skip the rebuild (and its flicker) when nothing rendered would change.
-		String signature = selectedSignature() + "|" + text + "|" + signatureOf(visible);
+		String signature = selectedSignature() + "|" + roleSignature() + "|" + text + "|" + signatureOf(visible);
 		if (signature.equals(renderedSignature))
 		{
 			return;
@@ -693,6 +849,20 @@ class SearchPanel extends JPanel
 		return sb.toString();
 	}
 
+	/** A signature of the ticked-role set so toggling it triggers a rebuild. */
+	private String roleSignature()
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Role role : Role.values())
+		{
+			if (selectedRoles.contains(role))
+			{
+				sb.append(role.getId()).append(',');
+			}
+		}
+		return sb.toString();
+	}
+
 	/**
 	 * A stable signature of the visible parties so unchanged refreshes can no-op.
 	 * Includes each party's age in minutes so the "searching Xm" labels stay current.
@@ -707,6 +877,7 @@ class SearchPanel extends JPanel
 				.append('/').append(party.getCapacity())
 				.append('w').append(party.getWorld() == null ? "" : party.getWorld())
 				.append('L').append(party.getLayout() == null ? "" : party.getLayout())
+				.append('R').append(neededRolesOf(party) == null ? "" : neededRolesOf(party))
 				.append('d').append(party.isHardMode() ? "h" : "").append(party.getInvocation())
 				.append('@').append(ageMinutes(now, party.getCreatedAt())).append(';');
 		}
@@ -845,6 +1016,19 @@ class SearchPanel extends JPanel
 			info.add(req);
 		}
 
+		// Roles still needed (ToB/CoX), wrapped across rows so the full list shows.
+		String needs = neededRolesText(activity, party);
+		if (needs != null)
+		{
+			for (String line : wrapByComma(needs, 30))
+			{
+				JLabel roles = new JLabel(line);
+				roles.setForeground(ColorScheme.BRAND_ORANGE);
+				roles.setFont(FontManager.getRunescapeSmallFont());
+				info.add(roles);
+			}
+		}
+
 		if (party.getDescription() != null && !party.getDescription().isEmpty())
 		{
 			JLabel desc = new JLabel(party.getDescription());
@@ -955,6 +1139,70 @@ class SearchPanel extends JPanel
 		return req.toString();
 	}
 
+	/**
+	 * A "Needs: North freeze, Range x2" summary of a role party's still-open roles,
+	 * or null when the activity has no roles / nothing's open.
+	 */
+	private static String neededRolesText(Activity activity, Party party)
+	{
+		if (activity == null || !activity.hasRoles())
+		{
+			return null;
+		}
+		List<String> needed = neededRolesOf(party);
+		if (needed == null || needed.isEmpty())
+		{
+			return null;
+		}
+		// Count occurrences keeping first-seen order.
+		Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+		for (String id : needed)
+		{
+			counts.merge(id, 1, Integer::sum);
+		}
+		List<String> parts = new ArrayList<>();
+		for (Map.Entry<String, Integer> entry : counts.entrySet())
+		{
+			String name = Role.displayNameOf(entry.getKey());
+			parts.add(entry.getValue() > 1 ? name + " x" + entry.getValue() : name);
+		}
+		return "Needs: " + String.join(", ", parts);
+	}
+
+	/**
+	 * Force the applicant to pick one of a role party's still-open roles. Returns
+	 * the chosen role id, or null if they cancelled (or there's nothing to choose).
+	 */
+	private String promptForRole(Party party, Activity activity)
+	{
+		List<Role> options = new ArrayList<>();
+		List<String> needed = neededRolesOf(party);
+		if (needed != null)
+		{
+			for (String id : needed)
+			{
+				Role role = Role.fromId(id);
+				if (role != null && !options.contains(role))
+				{
+					options.add(role);
+				}
+			}
+		}
+		if (options.isEmpty())
+		{
+			// No advertised roles to choose from - fall back to the full role set.
+			options.addAll(activity.roles());
+		}
+		if (options.isEmpty())
+		{
+			return null;
+		}
+		Role[] choices = options.toArray(new Role[0]);
+		Role pick = (Role) JOptionPane.showInputDialog(this, "Which role will you fill?",
+			"Choose a role", JOptionPane.QUESTION_MESSAGE, null, choices, choices[0]);
+		return pick != null ? pick.getId() : null;
+	}
+
 	/** True if this is the party we're currently in as a member. */
 	private boolean isActive(Party party)
 	{
@@ -999,6 +1247,18 @@ class SearchPanel extends JPanel
 			return;
 		}
 
+		// ToB/CoX: the applicant must commit to one of the party's open roles.
+		Activity activity = Activity.fromId(party.getActivity());
+		String role = null;
+		if (activity != null && activity.hasRoles())
+		{
+			role = promptForRole(party, activity);
+			if (role == null)
+			{
+				return; // cancelled the role dialog
+			}
+		}
+
 		JButton button = applyButtons.get(party.getId());
 		if (button != null)
 		{
@@ -1007,7 +1267,8 @@ class SearchPanel extends JPanel
 		}
 
 		// Leave whatever party we're currently in first (one party at a time).
-		leaveCurrentThen(() -> doApply(party));
+		final String chosenRole = role;
+		leaveCurrentThen(() -> doApply(party, chosenRole));
 	}
 
 	private void leaveCurrentThen(Runnable next)
@@ -1031,7 +1292,7 @@ class SearchPanel extends JPanel
 		next.run();
 	}
 
-	private void doApply(Party party)
+	private void doApply(Party party, String role)
 	{
 		String passphrase = party.getPassphrase();
 		if (passphrase == null || passphrase.isEmpty())
@@ -1041,9 +1302,10 @@ class SearchPanel extends JPanel
 			return;
 		}
 
-		liveParty.joinParty(passphrase, party.getActivity(), party.getCapacity());
+		liveParty.joinParty(passphrase, party.getActivity(), party.getCapacity(), role);
 		partyState.setMember(party);
-		setStatus("Joined " + party.getHost() + "'s room - awaiting host approval.");
+		String roleSuffix = role != null ? " as " + Role.displayNameOf(role) : "";
+		setStatus("Joined " + party.getHost() + "'s room" + roleSuffix + " - awaiting host approval.");
 		updateAllButtons();
 	}
 

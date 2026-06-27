@@ -10,6 +10,7 @@ import net.osparty.model.Applicant;
 import net.osparty.model.Applicant.EquipmentSlot;
 import net.osparty.model.LootRule;
 import net.osparty.model.Party;
+import net.osparty.model.Role;
 import net.osparty.party.LiveParty;
 import net.osparty.party.LiveParty.RosterMember;
 import net.osparty.party.LiveParty.Status;
@@ -200,7 +201,7 @@ class CurrentPanel extends JPanel
 			if (partyState.isHost() && partyState.getCurrentParty() != null)
 			{
 				partyService.heartbeat(partyState.getCurrentParty().getId(), currentPartySize(),
-					currentWorld.getAsInt(), currentLayout(), ok -> { }, err -> { });
+					currentWorld.getAsInt(), currentLayout(), currentNeededRolesParam(), ok -> { }, err -> { });
 			}
 		}).start();
 
@@ -216,7 +217,7 @@ class CurrentPanel extends JPanel
 			{
 				lastReportedLayout = layout;
 				partyService.heartbeat(partyState.getCurrentParty().getId(), currentPartySize(),
-					currentWorld.getAsInt(), layout, ok -> { }, err -> { });
+					currentWorld.getAsInt(), layout, currentNeededRolesParam(), ok -> { }, err -> { });
 			}
 		}).start();
 
@@ -248,6 +249,62 @@ class CurrentPanel extends JPanel
 			return null;
 		}
 		return coxLayoutSupplier.get();
+	}
+
+	/**
+	 * The still-open roles to advertise via the heartbeat (host + role activity),
+	 * comma-separated, or null. Computed live from the roster (who's filling what).
+	 */
+	private String currentNeededRolesParam()
+	{
+		Party party = partyState.getCurrentParty();
+		if (party == null || !partyState.isHost())
+		{
+			return null;
+		}
+		Activity activity = Activity.fromId(party.getActivity());
+		if (activity == null || !activity.hasRoles())
+		{
+			return null;
+		}
+		List<String> needed = liveParty.neededRoles(party.getRequiredRoles());
+		if (needed == null || needed.isEmpty())
+		{
+			return null;
+		}
+		return String.join(",", needed);
+	}
+
+	/**
+	 * A "Needs: North freeze, Range x2" summary of the still-open roles, or null
+	 * when the activity has no roles / nothing's open. The host computes this live
+	 * from the roster; members read the advertised {@code neededRoles}.
+	 */
+	private String neededRolesText(Activity activity, Party party)
+	{
+		if (activity == null || !activity.hasRoles())
+		{
+			return null;
+		}
+		List<String> needed = partyState.isHost()
+			? liveParty.neededRoles(party.getRequiredRoles())
+			: party.getNeededRoles();
+		if (needed == null || needed.isEmpty())
+		{
+			return null;
+		}
+		Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+		for (String id : needed)
+		{
+			counts.merge(id, 1, Integer::sum);
+		}
+		List<String> parts = new ArrayList<>();
+		for (Map.Entry<String, Integer> entry : counts.entrySet())
+		{
+			String name = Role.displayNameOf(entry.getKey());
+			parts.add(entry.getValue() > 1 ? name + " x" + entry.getValue() : name);
+		}
+		return "Needs: " + String.join(", ", parts);
 	}
 
 	void refresh()
@@ -292,7 +349,7 @@ class CurrentPanel extends JPanel
 		{
 			lastReportedSize = admitted;
 			partyService.heartbeat(party.getId(), admitted, currentWorld.getAsInt(), currentLayout(),
-				ok -> { }, err -> { });
+				currentNeededRolesParam(), ok -> { }, err -> { });
 		}
 
 		StringBuilder spots = new StringBuilder();
@@ -309,6 +366,14 @@ class CurrentPanel extends JPanel
 			JLabel reqLabel = subLabel(req);
 			reqLabel.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
 			content.add(reqLabel);
+		}
+
+		String needs = neededRolesText(activity, party);
+		if (needs != null)
+		{
+			JLabel needsLabel = subLabel(needs);
+			needsLabel.setForeground(ColorScheme.BRAND_ORANGE);
+			content.add(needsLabel);
 		}
 
 		// Party type tags: loot rule, ironman-only, private.
@@ -526,6 +591,22 @@ class CurrentPanel extends JPanel
 		nameRow.add(dot);
 		nameRow.add(name);
 		addLine(stack, nameRow, 0);
+
+		// The role this member is filling (ToB/CoX): from our own choice when it's
+		// us, otherwise from their live self-report.
+		if (activity != null && activity.hasRoles())
+		{
+			String roleId = member.isLocal()
+				? liveParty.getLocalRole()
+				: (member.getData() != null ? member.getData().getRole() : null);
+			if (roleId != null)
+			{
+				JLabel roleLabel = new JLabel("Role: " + Role.displayNameOf(roleId));
+				roleLabel.setForeground(ColorScheme.BRAND_ORANGE);
+				roleLabel.setFont(FontManager.getRunescapeSmallFont());
+				addLine(stack, roleLabel, 16);
+			}
+		}
 
 		// Line 2: world + friends-chat indicator.
 		JComponent meta = buildMemberMeta(member, hostName);
@@ -1029,6 +1110,7 @@ class CurrentPanel extends JPanel
 		applicant.setHardModeKillCount(update.getHardModeKillCount());
 		applicant.setPbSeconds(update.getPbSeconds());
 		applicant.setAccountType(update.getAccountType());
+		applicant.setRole(update.getRole());
 		return applicant;
 	}
 

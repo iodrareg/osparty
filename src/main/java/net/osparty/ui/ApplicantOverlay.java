@@ -2,6 +2,7 @@ package net.osparty.ui;
 
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
+import net.osparty.model.Role;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -64,6 +65,15 @@ public class ApplicantOverlay extends OverlayPanel
 				.left(a.getName())
 				.right("cb " + a.getCombatLevel())
 				.build());
+
+			if (a.getRole() != null)
+			{
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left("Role")
+					.right(Role.displayNameOf(a.getRole()))
+					.rightColor(Color.ORANGE)
+					.build());
+			}
 
 			if (a.getKillCount() >= 0)
 			{
