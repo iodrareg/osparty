@@ -688,6 +688,38 @@ class SearchPanel extends JPanel
 		return (mins / 60) + "h " + (mins % 60) + "m";
 	}
 
+	/**
+	 * Greedily pack a comma-separated string into lines no longer than {@code max}
+	 * characters, so a long value wraps across several single-line label rows.
+	 * Continued lines keep a trailing comma to show they run on.
+	 */
+	private static List<String> wrapByComma(String text, int max)
+	{
+		List<String> lines = new ArrayList<>();
+		StringBuilder line = new StringBuilder();
+		for (String part : text.split(", "))
+		{
+			if (line.length() == 0)
+			{
+				line.append(part);
+			}
+			else if (line.length() + 2 + part.length() <= max)
+			{
+				line.append(", ").append(part);
+			}
+			else
+			{
+				lines.add(line + ",");
+				line = new StringBuilder(part);
+			}
+		}
+		if (line.length() > 0)
+		{
+			lines.add(line.toString());
+		}
+		return lines;
+	}
+
 	private JPanel buildPartyCard(Activity activity, Party party)
 	{
 		// Cap height dynamically: a fixed maximum computed before the children
@@ -772,13 +804,17 @@ class SearchPanel extends JPanel
 			info.add(desc);
 		}
 
-		// CoX raid layout the host is advertising (kept live via heartbeat).
+		// CoX raid layout the host is advertising (kept live via heartbeat). Wrapped
+		// across rows by comma so the full rotation is visible, not truncated.
 		if (party.getLayout() != null && !party.getLayout().isEmpty())
 		{
-			JLabel layout = new JLabel("Layout: " + party.getLayout());
-			layout.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
-			layout.setFont(FontManager.getRunescapeSmallFont());
-			info.add(layout);
+			for (String line : wrapByComma("Layout: " + party.getLayout(), 30))
+			{
+				JLabel layout = new JLabel(line);
+				layout.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
+				layout.setFont(FontManager.getRunescapeSmallFont());
+				info.add(layout);
+			}
 		}
 
 		JButton applyButton = new JButton("Apply");
