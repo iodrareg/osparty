@@ -75,7 +75,7 @@ public class OSPartyPanel extends PluginPanel
 
 		SearchPanel searchPanel = new SearchPanel(partyService, playerNameSupplier,
 			friendsChatOwnerSupplier, worldSupplier, partyState, liveParty, accountTypeSupplier,
-			mapRegionsSupplier, worldRegionResolver);
+			mapRegionsSupplier, worldRegionResolver, killcountService);
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
 			accountTypeSupplier, mapRegionsSupplier, coxLayoutSupplier, configManager);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,

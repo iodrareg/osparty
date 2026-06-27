@@ -1,5 +1,6 @@
 package net.osparty.ui;
 
+import net.osparty.KillcountService;
 import net.osparty.api.PartyService;
 import net.osparty.model.AccountTypes;
 import net.osparty.model.Activity;
@@ -74,6 +75,7 @@ class SearchPanel extends JPanel
 	private final Supplier<int[]> mapRegionsSupplier;
 	/** Resolves a world number to its region, for the host's location flag. */
 	private final IntFunction<WorldRegion> worldRegionResolver;
+	private final KillcountService killcountService;
 
 	/** Checkbox list of activities to include; all selected by default. */
 	private final JPanel activityListPanel = new JPanel();
@@ -109,7 +111,7 @@ class SearchPanel extends JPanel
 	SearchPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		Supplier<String> friendsChatOwnerSupplier, IntSupplier worldSupplier, PartyState partyState,
 		LiveParty liveParty, Supplier<AccountType> accountTypeSupplier, Supplier<int[]> mapRegionsSupplier,
-		IntFunction<WorldRegion> worldRegionResolver)
+		IntFunction<WorldRegion> worldRegionResolver, KillcountService killcountService)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -120,6 +122,7 @@ class SearchPanel extends JPanel
 		this.accountTypeSupplier = accountTypeSupplier;
 		this.mapRegionsSupplier = mapRegionsSupplier;
 		this.worldRegionResolver = worldRegionResolver;
+		this.killcountService = killcountService;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -493,6 +496,11 @@ class SearchPanel extends JPanel
 			setStatus("That party is for ironman accounts.");
 			return;
 		}
+		if (kcStatus(party) == KcStatus.BELOW)
+		{
+			setStatus("You don't meet that party's minimum killcount.");
+			return;
+		}
 		codeField.setText("");
 		leaveCurrentThen(() -> doApply(party));
 	}
@@ -501,6 +509,47 @@ class SearchPanel extends JPanel
 	private boolean meetsIronmanRule(Party party)
 	{
 		return !party.isIronmanOnly() || AccountTypes.isIronman(accountTypeSupplier.get());
+	}
+
+	private enum KcStatus
+	{
+		/** Meets the requirement (or there is none / it can't be checked). */
+		OK,
+		/** Hiscore lookup in progress; not yet known. */
+		PENDING,
+		/** Known to be below the required killcount. */
+		BELOW
+	}
+
+	/**
+	 * Whether the local player meets a party's minimum-killcount requirement, looked
+	 * up from the hiscores. Only blocks when we positively know they're below; an
+	 * unranked/unknown killcount (-1) doesn't block (the host still sees it and can
+	 * decide). Triggers an async lookup the first time, refreshing buttons when done.
+	 */
+	private KcStatus kcStatus(Party party)
+	{
+		Activity activity = Activity.fromId(party.getActivity());
+		int minKc = party.getMinKillCount();
+		int minHard = activity != null && activity.hasHardMode() ? party.getMinHardModeKillCount() : 0;
+		if ((minKc <= 0 && minHard <= 0) || activity == null)
+		{
+			return KcStatus.OK;
+		}
+		String me = playerNameSupplier.get();
+		if (me == null)
+		{
+			return KcStatus.OK; // login gating handles this
+		}
+		KillcountService.Killcount kc = killcountService.cached(me, activity);
+		if (kc == null)
+		{
+			killcountService.lookup(me, activity, this::updateAllButtons);
+			return KcStatus.PENDING;
+		}
+		boolean below = (minKc > 0 && kc.killCount >= 0 && kc.killCount < minKc)
+			|| (minHard > 0 && kc.hardModeKillCount >= 0 && kc.hardModeKillCount < minHard);
+		return below ? KcStatus.BELOW : KcStatus.OK;
 	}
 
 	private LootRule lootFilterValue()
@@ -938,6 +987,12 @@ class SearchPanel extends JPanel
 			setStatus("This party is for ironman accounts.");
 			return;
 		}
+		if (kcStatus(party) == KcStatus.BELOW)
+		{
+			setStatus("You don't meet this party's minimum killcount.");
+			updateAllButtons();
+			return;
+		}
 		if (cooldownRemainingSeconds(party.getId()) > 0)
 		{
 			setStatus("On cooldown for this party.");
@@ -1074,6 +1129,22 @@ class SearchPanel extends JPanel
 			button.setText("Wait " + remaining + "s");
 			button.setEnabled(false);
 			button.setToolTipText("Recently applied to this party");
+			return;
+		}
+		KcStatus kc = kcStatus(party);
+		if (kc == KcStatus.BELOW)
+		{
+			button.setText("Need KC");
+			button.setEnabled(false);
+			button.setToolTipText("You don't meet this party's minimum killcount ("
+				+ requirementText(Activity.fromId(party.getActivity()), party) + ")");
+			return;
+		}
+		if (kc == KcStatus.PENDING)
+		{
+			button.setText("Checking KC...");
+			button.setEnabled(false);
+			button.setToolTipText("Looking up your killcount on the hiscores");
 			return;
 		}
 		button.setText("Apply");
