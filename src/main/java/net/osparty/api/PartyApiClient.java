@@ -41,7 +41,7 @@ public class PartyApiClient implements PartyService
 	}.getType();
 
 	/** Fixed party advertising API. Not user-configurable. */
-	private static final String API_BASE_URL = "https://api.osparty.net";
+	private static final String API_BASE_URL = "http://localhost:8080";
 
 	private final OkHttpClient httpClient;
 	private final Gson gson;
@@ -139,15 +139,16 @@ public class PartyApiClient implements PartyService
 	 * stale. PUT (not POST) so it isn't caught by the create rate limit.
 	 */
 	@Override
-	public void heartbeat(String partyId, int size, int world, String layout,
+	public void heartbeat(String partyId, int size, int world, String layout, String roles,
 		Consumer<Party> onSuccess, Consumer<Throwable> onError)
 	{
 		HttpUrl.Builder url = baseUrl()
 			.addPathSegment("parties")
 			.addPathSegment(partyId)
 			.addPathSegment("heartbeat");
-		// Report the live occupancy, host world and (CoX) raid layout so search
-		// reflects who's in the party, where the host is, and the raid rotation.
+		// Report the live occupancy, host world, (CoX) raid layout and the still-open
+		// roles so search reflects who's in the party, where the host is, the raid
+		// rotation, and which roles remain.
 		if (size > 0)
 		{
 			url.addQueryParameter("size", Integer.toString(size));
@@ -159,6 +160,10 @@ public class PartyApiClient implements PartyService
 		if (layout != null && !layout.isEmpty())
 		{
 			url.addQueryParameter("layout", layout);
+		}
+		if (roles != null && !roles.isEmpty())
+		{
+			url.addQueryParameter("roles", roles);
 		}
 
 		RequestBody body = RequestBody.create(JSON, "{}");
