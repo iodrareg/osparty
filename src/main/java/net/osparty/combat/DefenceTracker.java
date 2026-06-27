@@ -34,6 +34,8 @@ public class DefenceTracker
 	private int bossIndex = -1;
 	private String bossName = "";
 	private double bossDef = -1;
+	/** The monster's starting defence (scaled), so the overlay can show the drop. */
+	private double bossStartDef;
 	private double minDef;
 
 	/** Specs seen this tick, applied in order on the next game tick. */
@@ -46,6 +48,7 @@ public class DefenceTracker
 		int npcIndex;
 		long current;
 		long min;
+		long base;
 	}
 
 	@Inject
@@ -127,6 +130,7 @@ public class DefenceTracker
 			int partySize = Math.max(1, client.getVarbitValue(COX_SCALED_PARTY_SIZE_VARBIT));
 			bossDef = (int) (bossDef * (((int) Math.sqrt(partySize - 1) + ((partySize - 1) * 7 / 10 + 100)) / 100.0));
 		}
+		bossStartDef = bossDef;
 	}
 
 	private void calculateDefence(SpecialWeapon weapon, int hit)
@@ -238,7 +242,7 @@ public class DefenceTracker
 		{
 			return null;
 		}
-		return new DefenceState(bossIndex, Math.round(bossDef), Math.round(minDef));
+		return new DefenceState(bossIndex, Math.round(bossDef), Math.round(minDef), Math.round(bossStartDef));
 	}
 
 	public void reset()
@@ -246,6 +250,7 @@ public class DefenceTracker
 		bossIndex = -1;
 		bossName = "";
 		bossDef = -1;
+		bossStartDef = 0;
 		minDef = 0;
 		pending.clear();
 	}

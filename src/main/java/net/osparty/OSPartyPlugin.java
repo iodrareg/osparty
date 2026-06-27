@@ -244,7 +244,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		tilePingOverlay = new TilePingOverlay(client, liveParty, config);
 		overlayManager.add(tilePingOverlay);
 
-		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config);
+		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config,
+			ImageUtil.resizeImage(skillIconManager.getSkillImage(Skill.DEFENCE), 16, 16));
 		overlayManager.add(defenceOverlay);
 		// The defence tracker reads RuneLite's Special Attack Counter events, which
 		// only fire while that plugin is running, so make sure it's enabled.

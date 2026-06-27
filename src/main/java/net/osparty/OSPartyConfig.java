@@ -1,6 +1,7 @@
 package net.osparty;
 
 import java.awt.Color;
+import net.osparty.combat.DefenceOverlayPosition;
 import net.runelite.client.config.Alpha;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
@@ -119,10 +120,22 @@ public interface OSPartyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "defenceHpBarPosition",
+		name = "HP-bar position",
+		description = "Where the scene defence display sits relative to the monster (only applies to the HP-bar display).",
+		position = 2,
+		section = DEFENCE
+	)
+	default DefenceOverlayPosition defenceHpBarPosition()
+	{
+		return DefenceOverlayPosition.ABOVE_HP_BAR;
+	}
+
+	@ConfigItem(
 		keyName = "defenceInfoBox",
 		name = "Show in status bar",
 		description = "Display the monster's live defence as an info box in the status/info-box bar. Can be used together with, or instead of, the HP-bar display.",
-		position = 2,
+		position = 3,
 		section = DEFENCE
 	)
 	default boolean defenceInfoBox()
@@ -134,7 +147,7 @@ public interface OSPartyConfig extends Config
 		keyName = "defenceShowFullLevel",
 		name = "Show full level",
 		description = "For monsters with a minimum defence, show the full level instead of the amount above the minimum.",
-		position = 3,
+		position = 4,
 		section = DEFENCE
 	)
 	default boolean defenceShowFullLevel()
@@ -146,7 +159,7 @@ public interface OSPartyConfig extends Config
 		keyName = "defenceLowThreshold",
 		name = "Low defence threshold",
 		description = "Defence at or below this (above the minimum) is shown in the low-defence colour.",
-		position = 4,
+		position = 5,
 		section = DEFENCE
 	)
 	default int defenceLowThreshold()
@@ -159,7 +172,7 @@ public interface OSPartyConfig extends Config
 		keyName = "defenceHighColor",
 		name = "High defence colour",
 		description = "Colour when defence is above the low threshold.",
-		position = 5,
+		position = 6,
 		section = DEFENCE
 	)
 	default Color defenceHighColor()
@@ -172,7 +185,7 @@ public interface OSPartyConfig extends Config
 		keyName = "defenceLowColor",
 		name = "Low defence colour",
 		description = "Colour when defence is at or below the low threshold.",
-		position = 6,
+		position = 7,
 		section = DEFENCE
 	)
 	default Color defenceLowColor()
@@ -185,7 +198,7 @@ public interface OSPartyConfig extends Config
 		keyName = "defenceCappedColor",
 		name = "Capped defence colour",
 		description = "Colour when defence is fully drained (at the monster's minimum).",
-		position = 7,
+		position = 8,
 		section = DEFENCE
 	)
 	default Color defenceCappedColor()
