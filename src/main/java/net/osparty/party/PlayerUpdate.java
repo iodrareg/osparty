@@ -44,6 +44,9 @@ public class PlayerUpdate extends PartyMemberMessage
 	/** The member's account type name (NORMAL / IRONMAN / ...); null when unknown. */
 	private String accountType;
 
+	/** The role id the member is filling (raids only); null when none/unknown. */
+	private String role;
+
 	/** Personal best (seconds) for the party's activity+team size; {@code -1} when unknown. */
 	private double pbSeconds = -1;
 

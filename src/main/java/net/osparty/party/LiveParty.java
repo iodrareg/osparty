@@ -93,6 +93,9 @@ public class LiveParty
 	private volatile String currentActivityId;
 	private volatile int currentTeamSize;
 
+	/** The role id we've chosen to fill, broadcast in our self-report; null when none. */
+	private volatile String localRole;
+
 	private final Map<Long, PlayerUpdate> playerData = new ConcurrentHashMap<>();
 	/** memberId -> epoch millis we last heard from them (presence + stale pruning). */
 	private final Map<Long, Long> lastSeen = new ConcurrentHashMap<>();
@@ -221,7 +224,7 @@ public class LiveParty
 
 	/** Host {@code passphrase}'s room with the given rules. */
 	public void hostParty(String passphrase, String hostName, String activityId, int capacity,
-		boolean locked)
+		boolean locked, String role)
 	{
 		reset();
 		hosting = true;
@@ -230,6 +233,7 @@ public class LiveParty
 		this.locked = locked;
 		this.currentActivityId = activityId;
 		this.currentTeamSize = capacity;
+		this.localRole = role;
 		stateDirty = true;
 		localDirty = true;
 		partyService.changeParty(passphrase);
@@ -237,14 +241,36 @@ public class LiveParty
 	}
 
 	/** Join an advertised room as an applicant (pending until the host admits). */
-	public void joinParty(String passphrase, String activityId, int teamSize)
+	public void joinParty(String passphrase, String activityId, int teamSize, String role)
 	{
 		reset();
 		this.currentActivityId = activityId;
 		this.currentTeamSize = teamSize;
+		this.localRole = role;
 		localDirty = true;
 		partyService.changeParty(passphrase);
 		fire();
+	}
+
+	/**
+	 * Change the role we're filling and re-broadcast our self-report so the host
+	 * (and everyone) sees the new choice. No-op when unchanged.
+	 */
+	public void setLocalRole(String role)
+	{
+		if (java.util.Objects.equals(role, localRole))
+		{
+			return;
+		}
+		localRole = role;
+		localDirty = true;
+		fire();
+	}
+
+	/** @return the role id we're currently filling, or null. */
+	public String getLocalRole()
+	{
+		return localRole;
 	}
 
 	/** Leave the room. Hosts send a closing state first, best effort. */
@@ -276,6 +302,7 @@ public class LiveParty
 		ticksSinceLocalBroadcast = 0;
 		currentActivityId = null;
 		currentTeamSize = 0;
+		localRole = null;
 		lastState = null;
 		stateDirty = false;
 		localDirty = false;
@@ -627,6 +654,8 @@ public class LiveParty
 			{
 				// Our personal best for this party's activity+size (read locally).
 				update.setPbSeconds(PersonalBests.read(configManager, currentActivityId, currentTeamSize));
+				// The role we've chosen to fill (a user choice, not read from the client).
+				update.setRole(localRole);
 				broadcastLocal(update);
 			}
 		}
@@ -922,6 +951,36 @@ public class LiveParty
 	{
 		Long seen = lastSeen.get(memberId);
 		return seen != null && now - seen < ONLINE_TIMEOUT_MS;
+	}
+
+	/**
+	 * The roles still open given the host's full {@code requiredRoles} composition:
+	 * the required multiset minus the role each admitted member (host included) has
+	 * chosen. Applicants only ever pick a currently-needed role, so each admitted
+	 * member's role removes exactly one matching slot. Returns the input unchanged
+	 * when there's no composition.
+	 */
+	public List<String> neededRoles(List<String> requiredRoles)
+	{
+		if (requiredRoles == null || requiredRoles.isEmpty())
+		{
+			return requiredRoles;
+		}
+		List<String> remaining = new ArrayList<>(requiredRoles);
+		for (RosterMember member : roster())
+		{
+			if (member.getStatus() == Status.PENDING)
+			{
+				continue; // only admitted members (host + members) occupy slots
+			}
+			String role = member.isLocal() ? localRole
+				: (member.getData() != null ? member.getData().getRole() : null);
+			if (role != null)
+			{
+				remaining.remove(role);
+			}
+		}
+		return remaining;
 	}
 
 	private long localId()
