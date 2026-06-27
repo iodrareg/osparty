@@ -1,5 +1,6 @@
 package net.osparty.party;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -17,6 +18,7 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.osparty.PersonalBests;
 import net.runelite.api.Client;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.party.PartyMember;
@@ -140,6 +142,11 @@ public class LiveParty
 	private volatile Runnable onAllReady;
 	private volatile Runnable onReadyExpired;
 
+	// ---- map pings -----------------------------------------------------------
+	/** A ping animates for this long after it's received, then disappears. */
+	private static final long PING_DURATION_MS = 2_000;
+	private final List<TilePing> pings = new CopyOnWriteArrayList<>();
+
 	@Inject
 	private LiveParty(PartyService partyService, WSClient wsClient, Client client, ClientThread clientThread,
 		ConfigManager configManager)
@@ -158,6 +165,7 @@ public class LiveParty
 		wsClient.registerMessage(MemberCommand.class);
 		wsClient.registerMessage(FcRequestMessage.class);
 		wsClient.registerMessage(ReadyCheckMessage.class);
+		wsClient.registerMessage(PingMessage.class);
 	}
 
 	public void unregister()
@@ -167,6 +175,7 @@ public class LiveParty
 		wsClient.unregisterMessage(MemberCommand.class);
 		wsClient.unregisterMessage(FcRequestMessage.class);
 		wsClient.unregisterMessage(ReadyCheckMessage.class);
+		wsClient.unregisterMessage(PingMessage.class);
 		reset();
 	}
 
@@ -263,6 +272,7 @@ public class LiveParty
 		lastSeen.clear();
 		leaving.clear();
 		clearReadyCheck();
+		pings.clear();
 		ticksSinceLocalBroadcast = 0;
 		currentActivityId = null;
 		currentTeamSize = 0;
@@ -516,6 +526,67 @@ public class LiveParty
 		long left = Math.max(0, READY_CHECK_TIMEOUT_MS - (System.currentTimeMillis() - readyCheckStartedAt)) / 1000;
 		return new ReadyCheckStatus(readyCheckStarter, ready, required.size(), (int) left,
 			readyMembers.contains(localId()));
+	}
+
+	// ---- map pings -----------------------------------------------------------
+
+	/**
+	 * Broadcast a tile ping to the party in {@code color}, labelled with our name.
+	 * We don't receive our own party messages, so the ping is also shown locally.
+	 */
+	public void sendPing(WorldPoint point, Color color)
+	{
+		if (!isConnected() || point == null)
+		{
+			return;
+		}
+		long id = localId();
+		if (id == 0)
+		{
+			return;
+		}
+		String name = localName();
+
+		PingMessage message = new PingMessage();
+		message.setWorldX(point.getX());
+		message.setWorldY(point.getY());
+		message.setPlane(point.getPlane());
+		message.setName(name);
+		message.setColor(color.getRGB());
+		partyService.send(message);
+
+		addPing(new TilePing(point, name, color, System.currentTimeMillis()));
+	}
+
+	/** Handle an inbound ping from a peer (ignores our own echo, if any). */
+	public void onPing(PingMessage message)
+	{
+		if (message.getMemberId() == localId() && localId() != 0)
+		{
+			return;
+		}
+		WorldPoint point = new WorldPoint(message.getWorldX(), message.getWorldY(), message.getPlane());
+		Color color = new Color(message.getColor(), true);
+		addPing(new TilePing(point, message.getName(), color, System.currentTimeMillis()));
+	}
+
+	private void addPing(TilePing ping)
+	{
+		expirePings();
+		pings.add(ping);
+	}
+
+	/** @return the pings still within their animation window (most-recent included). */
+	public List<TilePing> activePings()
+	{
+		expirePings();
+		return pings;
+	}
+
+	private void expirePings()
+	{
+		long now = System.currentTimeMillis();
+		pings.removeIf(p -> now - p.getCreatedAt() > PING_DURATION_MS);
 	}
 
 	private String localName()

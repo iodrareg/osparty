@@ -1,14 +1,24 @@
 package net.osparty;
 
+import java.awt.Color;
+import net.runelite.client.config.Alpha;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Keybind;
 
 @ConfigGroup(OSPartyConfig.GROUP)
 public interface OSPartyConfig extends Config
 {
 	String GROUP = "osparty";
+
+	@ConfigSection(
+		name = "Defence tracker",
+		description = "Show the live defence of a monster the party is draining with special attacks.",
+		position = 9
+	)
+	String DEFENCE = "defence";
 
 	@ConfigSection(
 		name = "Meme mode",
@@ -17,17 +27,6 @@ public interface OSPartyConfig extends Config
 		closedByDefault = true
 	)
 	String MEME_MODE = "memeMode";
-
-	@ConfigItem(
-		keyName = "apiBaseUrl",
-		name = "API base URL",
-		description = "Base URL of the party advertising API (no trailing slash).",
-		position = 1
-	)
-	default String apiBaseUrl()
-	{
-		return "https://api.osparty.net";
-	}
 
 	@ConfigItem(
 		keyName = "defaultCapacity",
@@ -60,6 +59,138 @@ public interface OSPartyConfig extends Config
 	default boolean inGamePrompts()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "receiveFriendsChatRequests",
+		name = "Friends-chat join requests",
+		description = "Allow party hosts to ask you (via an on-screen popup) to join their friends chat. Turn off to ignore these requests.",
+		position = 5
+	)
+	default boolean receiveFriendsChatRequests()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "pings",
+		name = "Map pings",
+		description = "Show party members' tile pings on screen, and let you ping tiles for the party to see.",
+		position = 6
+	)
+	default boolean pings()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "pingHotkey",
+		name = "Ping hotkey",
+		description = "Hold this key and left-click a tile to ping it for the whole party.",
+		position = 7
+	)
+	default Keybind pingHotkey()
+	{
+		return new Keybind(java.awt.event.KeyEvent.VK_BACK_QUOTE, 0);
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "pingColor",
+		name = "Your ping colour",
+		description = "Colour your own tile pings appear in (and the name label) for everyone in the party.",
+		position = 8
+	)
+	default Color pingColor()
+	{
+		return new Color(0, 255, 255);
+	}
+
+	@ConfigItem(
+		keyName = "defenceHpBar",
+		name = "Show next to HP bar",
+		description = "Display a monster's live defence on the scene, next to its health bar, as the party drains it. Needs the \"Special Attack Counter\" plugin enabled.",
+		position = 1,
+		section = DEFENCE
+	)
+	default boolean defenceHpBar()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "defenceInfoBox",
+		name = "Show in status bar",
+		description = "Display the monster's live defence as an info box in the status/info-box bar. Can be used together with, or instead of, the HP-bar display.",
+		position = 2,
+		section = DEFENCE
+	)
+	default boolean defenceInfoBox()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "defenceShowFullLevel",
+		name = "Show full level",
+		description = "For monsters with a minimum defence, show the full level instead of the amount above the minimum.",
+		position = 3,
+		section = DEFENCE
+	)
+	default boolean defenceShowFullLevel()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "defenceLowThreshold",
+		name = "Low defence threshold",
+		description = "Defence at or below this (above the minimum) is shown in the low-defence colour.",
+		position = 4,
+		section = DEFENCE
+	)
+	default int defenceLowThreshold()
+	{
+		return 10;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "defenceHighColor",
+		name = "High defence colour",
+		description = "Colour when defence is above the low threshold.",
+		position = 5,
+		section = DEFENCE
+	)
+	default Color defenceHighColor()
+	{
+		return Color.WHITE;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "defenceLowColor",
+		name = "Low defence colour",
+		description = "Colour when defence is at or below the low threshold.",
+		position = 6,
+		section = DEFENCE
+	)
+	default Color defenceLowColor()
+	{
+		return Color.YELLOW;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "defenceCappedColor",
+		name = "Capped defence colour",
+		description = "Colour when defence is fully drained (at the monster's minimum).",
+		position = 7,
+		section = DEFENCE
+	)
+	default Color defenceCappedColor()
+	{
+		return Color.GREEN;
 	}
 
 	@ConfigItem(

@@ -27,10 +27,12 @@ public interface PartyService
 
 	/**
 	 * Host keep-alive: tell the bulletin board the advertised party is still live,
-	 * and report the current live member count so search results show the real
-	 * occupancy (the API only tracks the ad; membership is peer-to-peer).
+	 * and report the current live member count and the host's current {@code world}
+	 * so search results show the real occupancy and location (the API only tracks
+	 * the ad; membership and the host's whereabouts are peer-to-peer). A non-positive
+	 * {@code size}/{@code world} is treated as "unknown" and left unchanged.
 	 */
-	void heartbeat(String partyId, int size, Consumer<Party> onSuccess, Consumer<Throwable> onError);
+	void heartbeat(String partyId, int size, int world, Consumer<Party> onSuccess, Consumer<Throwable> onError);
 
 	/** Submit an application for the logged in player to the given party. */
 	void applyToParty(String partyId, String player, Consumer<Party> onSuccess, Consumer<Throwable> onError);

@@ -35,6 +35,14 @@ tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'
 }
 
+// Ship runelite-plugin.properties on the classpath so the plugin can read its
+// own declared version at runtime (single source of truth for the version).
+processResources {
+    from(projectDir) {
+        include 'runelite-plugin.properties'
+    }
+}
+
 // RuneLite's ExternalPluginManager.loadBuiltin() requires assertions enabled,
 // and the client touches JDK-internal APIs that JDK 9+ encapsulates. These
 // flags keep OSPartyPluginTest.main() launchable on a modern JDK instead of

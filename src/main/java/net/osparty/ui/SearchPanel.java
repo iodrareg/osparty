@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import javax.swing.BorderFactory;
@@ -47,6 +48,7 @@ import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
+import net.runelite.http.api.worlds.WorldRegion;
 
 /**
  * "Search" tab: pick an activity, query the queue API for open parties, and
@@ -70,6 +72,8 @@ class SearchPanel extends JPanel
 	private final LiveParty liveParty;
 	private final Supplier<AccountType> accountTypeSupplier;
 	private final Supplier<int[]> mapRegionsSupplier;
+	/** Resolves a world number to its region, for the host's location flag. */
+	private final IntFunction<WorldRegion> worldRegionResolver;
 
 	/** Checkbox list of activities to include; all selected by default. */
 	private final JPanel activityListPanel = new JPanel();
@@ -82,6 +86,7 @@ class SearchPanel extends JPanel
 	private final JComboBox<String> lootFilter = new JComboBox<>(new String[]{"Any loot", "FFA", "Split"});
 	private final JCheckBox ironmanFilter = new JCheckBox("Ironman parties only");
 	private final JTextField codeField = new JTextField();
+	private final JButton joinButton = new JButton("Join");
 	private final JButton searchButton = new JButton("Refresh");
 	private final JLabel statusLabel = new JLabel();
 	private final JPanel resultsPanel = new JPanel();
@@ -103,7 +108,8 @@ class SearchPanel extends JPanel
 
 	SearchPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		Supplier<String> friendsChatOwnerSupplier, IntSupplier worldSupplier, PartyState partyState,
-		LiveParty liveParty, Supplier<AccountType> accountTypeSupplier, Supplier<int[]> mapRegionsSupplier)
+		LiveParty liveParty, Supplier<AccountType> accountTypeSupplier, Supplier<int[]> mapRegionsSupplier,
+		IntFunction<WorldRegion> worldRegionResolver)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -113,6 +119,7 @@ class SearchPanel extends JPanel
 		this.liveParty = liveParty;
 		this.accountTypeSupplier = accountTypeSupplier;
 		this.mapRegionsSupplier = mapRegionsSupplier;
+		this.worldRegionResolver = worldRegionResolver;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -171,6 +178,7 @@ class SearchPanel extends JPanel
 			{
 				applyRecommendation();
 				search();
+				updateJoinButton();
 			}
 
 			@Override
@@ -189,6 +197,17 @@ class SearchPanel extends JPanel
 			updateAllButtons();
 			maybeStartTimer();
 		});
+
+		// Keep the Apply/Join buttons in step with login state (cheap, no network),
+		// so logging in/out promptly enables or disables them.
+		new Timer(1_000, e -> {
+			if (isShowing())
+			{
+				updateAllButtons();
+			}
+		}).start();
+
+		updateJoinButton();
 	}
 
 	private JPanel buildControls()
@@ -405,14 +424,13 @@ class SearchPanel extends JPanel
 		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		label.setFont(FontManager.getRunescapeSmallFont());
 
-		JButton join = new JButton("Join");
-		join.setFocusPainted(false);
-		join.addActionListener(e -> joinByCode());
+		joinButton.setFocusPainted(false);
+		joinButton.addActionListener(e -> joinByCode());
 		codeField.addActionListener(e -> joinByCode());
 
 		panel.add(label, BorderLayout.NORTH);
 		panel.add(codeField, BorderLayout.CENTER);
-		panel.add(join, BorderLayout.EAST);
+		panel.add(joinButton, BorderLayout.EAST);
 		return panel;
 	}
 
@@ -638,6 +656,7 @@ class SearchPanel extends JPanel
 		{
 			sb.append(party.getId()).append(':').append(party.getSize())
 				.append('/').append(party.getCapacity())
+				.append('w').append(party.getWorld() == null ? "" : party.getWorld())
 				.append('@').append(ageMinutes(now, party.getCreatedAt())).append(';');
 		}
 		return sb.toString();
@@ -671,7 +690,7 @@ class SearchPanel extends JPanel
 	{
 		// Cap height dynamically: a fixed maximum computed before the children
 		// are added collapses the card under BoxLayout and hides its text.
-		JPanel card = new JPanel(new BorderLayout(6, 0))
+		JPanel card = new JPanel(new BorderLayout(0, 4))
 		{
 			@Override
 			public Dimension getMaximumSize()
@@ -704,10 +723,6 @@ class SearchPanel extends JPanel
 			? party.getSize() + "/" + party.getCapacity()
 			: String.valueOf(party.getSize());
 		StringBuilder sub = new StringBuilder(capacity).append(" players");
-		if (party.getWorld() != null && !party.getWorld().isEmpty())
-		{
-			sub.append(", W").append(party.getWorld());
-		}
 		String age = formatAge(party.getCreatedAt());
 		if (age != null)
 		{
@@ -717,8 +732,13 @@ class SearchPanel extends JPanel
 		meta.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		meta.setFont(FontManager.getRunescapeSmallFont());
 
-		info.add(activityLabel);
 		info.add(host);
+		// Host's world (with a country flag for its region) sits under the name.
+		JLabel worldLabel = buildWorldLabel(party);
+		if (worldLabel != null)
+		{
+			info.add(worldLabel);
+		}
 		info.add(meta);
 
 		String tagLine = tagLine(party);
@@ -747,8 +767,6 @@ class SearchPanel extends JPanel
 			info.add(desc);
 		}
 
-		card.add(info, BorderLayout.CENTER);
-
 		JButton applyButton = new JButton("Apply");
 		applyButton.setFocusPainted(false);
 		// One listener that dispatches by state: cancel the active application,
@@ -768,9 +786,49 @@ class SearchPanel extends JPanel
 		JPanel buttonWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
 		buttonWrap.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		buttonWrap.add(applyButton);
-		card.add(buttonWrap, BorderLayout.EAST);
+
+		// Header row: activity title takes the available width (the action button is
+		// pinned to the right). Keeping the button out of the info column means the
+		// "x/y players, searching ..." line gets the full card width and isn't truncated.
+		JPanel header = new JPanel(new BorderLayout(6, 0));
+		header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		header.add(activityLabel, BorderLayout.CENTER);
+		header.add(buttonWrap, BorderLayout.EAST);
+
+		card.add(header, BorderLayout.NORTH);
+		card.add(info, BorderLayout.CENTER);
 
 		return card;
+	}
+
+	/**
+	 * A "World 302" label with the host world's country flag, or null when the ad
+	 * has no world. The flag is omitted when the region can't be resolved (the
+	 * world list isn't loaded yet, or the world is unknown).
+	 */
+	private JLabel buildWorldLabel(Party party)
+	{
+		String raw = party.getWorld();
+		if (raw == null || raw.trim().isEmpty())
+		{
+			return null;
+		}
+		String digits = raw.replaceAll("\\D", "");
+		JLabel label = new JLabel("World " + (digits.isEmpty() ? raw.trim() : digits));
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setFont(FontManager.getRunescapeSmallFont());
+
+		if (!digits.isEmpty() && digits.length() <= 5 && worldRegionResolver != null)
+		{
+			WorldRegion region = worldRegionResolver.apply(Integer.parseInt(digits));
+			ImageIcon flag = WorldFlags.forRegion(region);
+			if (flag != null)
+			{
+				label.setIcon(flag);
+				label.setIconTextGap(4);
+			}
+		}
+		return label;
 	}
 
 	private String requirementText(Activity activity, Party party)
@@ -911,10 +969,27 @@ class SearchPanel extends JPanel
 				updateApplyButton(entry.getValue(), party);
 			}
 		}
+		updateJoinButton();
+	}
+
+	/** Joining (by code) needs a logged in account, so disable it while logged out. */
+	private void updateJoinButton()
+	{
+		boolean loggedIn = playerNameSupplier.get() != null;
+		joinButton.setEnabled(loggedIn);
+		joinButton.setToolTipText(loggedIn ? null : "Log in to join a party");
 	}
 
 	private void updateApplyButton(JButton button, Party party)
 	{
+		// You can browse parties while logged out, but applying needs an account.
+		if (playerNameSupplier.get() == null)
+		{
+			button.setText("Log in");
+			button.setEnabled(false);
+			button.setToolTipText("Log in to apply to a party");
+			return;
+		}
 		if (isOwnParty(party))
 		{
 			button.setText("Your party");

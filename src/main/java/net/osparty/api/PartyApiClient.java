@@ -1,6 +1,5 @@
 package net.osparty.api;
 
-import net.osparty.OSPartyConfig;
 import net.osparty.model.Activity;
 import net.osparty.model.Party;
 import net.osparty.model.PartyRequest;
@@ -41,27 +40,34 @@ public class PartyApiClient implements PartyService
 	{
 	}.getType();
 
+	/** Fixed party advertising API. Not user-configurable. */
+	private static final String API_BASE_URL = "https://api.osparty.net";
+
 	private final OkHttpClient httpClient;
 	private final Gson gson;
-	private final OSPartyConfig config;
 
 	@Inject
-	private PartyApiClient(OkHttpClient httpClient, Gson gson, OSPartyConfig config)
+	private PartyApiClient(OkHttpClient httpClient, Gson gson)
 	{
 		this.httpClient = httpClient;
 		this.gson = gson;
-		this.config = config;
 	}
 
 	private HttpUrl.Builder baseUrl()
 	{
-		HttpUrl parsed = HttpUrl.parse(config.apiBaseUrl());
+		HttpUrl parsed = HttpUrl.parse(API_BASE_URL);
 		if (parsed == null)
 		{
-			throw new IllegalStateException("Invalid API base URL: " + config.apiBaseUrl());
+			throw new IllegalStateException("Invalid API base URL: " + API_BASE_URL);
 		}
 		// Versioned base path: all endpoints live under /api/v1.
 		return parsed.newBuilder().addPathSegment("api").addPathSegment("v1");
+	}
+
+	/** @return the fixed API base URL (for logging/diagnostics). */
+	public static String apiBaseUrl()
+	{
+		return API_BASE_URL;
 	}
 
 	/**
@@ -133,16 +139,21 @@ public class PartyApiClient implements PartyService
 	 * stale. PUT (not POST) so it isn't caught by the create rate limit.
 	 */
 	@Override
-	public void heartbeat(String partyId, int size, Consumer<Party> onSuccess, Consumer<Throwable> onError)
+	public void heartbeat(String partyId, int size, int world, Consumer<Party> onSuccess, Consumer<Throwable> onError)
 	{
 		HttpUrl.Builder url = baseUrl()
 			.addPathSegment("parties")
 			.addPathSegment(partyId)
 			.addPathSegment("heartbeat");
-		// Report the live occupancy so search reflects who's actually in the party.
+		// Report the live occupancy and host world so search reflects who's actually
+		// in the party and where the host is.
 		if (size > 0)
 		{
 			url.addQueryParameter("size", Integer.toString(size));
+		}
+		if (world > 0)
+		{
+			url.addQueryParameter("world", Integer.toString(world));
 		}
 
 		RequestBody body = RequestBody.create(JSON, "{}");

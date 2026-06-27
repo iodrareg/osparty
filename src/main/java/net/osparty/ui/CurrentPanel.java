@@ -196,7 +196,7 @@ class CurrentPanel extends JPanel
 			if (partyState.isHost() && partyState.getCurrentParty() != null)
 			{
 				partyService.heartbeat(partyState.getCurrentParty().getId(), currentPartySize(),
-					ok -> { }, err -> { });
+					currentWorld.getAsInt(), ok -> { }, err -> { });
 			}
 		}).start();
 
@@ -253,7 +253,7 @@ class CurrentPanel extends JPanel
 		if (host && admitted > 0 && admitted != lastReportedSize)
 		{
 			lastReportedSize = admitted;
-			partyService.heartbeat(party.getId(), admitted, ok -> { }, err -> { });
+			partyService.heartbeat(party.getId(), admitted, currentWorld.getAsInt(), ok -> { }, err -> { });
 		}
 
 		StringBuilder spots = new StringBuilder();

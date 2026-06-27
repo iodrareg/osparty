@@ -8,18 +8,32 @@ import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import net.osparty.runewatch.RuneWatchService;
 import java.awt.BorderLayout;
+import java.awt.Cursor;
+import java.awt.Dimension;
+import java.awt.image.BufferedImage;
+import java.io.InputStream;
+import java.util.Properties;
 import java.util.function.IntConsumer;
+import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import net.runelite.api.vars.AccountType;
+import net.runelite.http.api.worlds.WorldRegion;
 import javax.swing.BorderFactory;
+import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
+import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.LinkBrowser;
 
 /**
  * Root side-panel. Hosts Search / Create tabs, plus a "Current" tab that only
@@ -29,6 +43,10 @@ import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
  */
 public class OSPartyPanel extends PluginPanel
 {
+	/** Plugin version shown in the footer, read from runelite-plugin.properties. */
+	private static final String VERSION = readPluginVersion();
+	private static final String GITHUB_URL = "https://github.com/iodrareg/osparty";
+
 	private final PartyState partyState = new PartyState();
 	private final LiveParty liveParty;
 	private final MaterialTabGroup tabGroup;
@@ -41,7 +59,7 @@ public class OSPartyPanel extends PluginPanel
 		IntSupplier worldSupplier, ItemManager itemManager, LiveParty liveParty,
 		RuneWatchService runeWatchService, Supplier<AccountType> accountTypeSupplier,
 		KillcountService killcountService, SkillIconManager skillIconManager, IntConsumer worldHopper,
-		Supplier<int[]> mapRegionsSupplier)
+		Supplier<int[]> mapRegionsSupplier, IntFunction<WorldRegion> worldRegionResolver)
 	{
 		super(false);
 
@@ -55,7 +73,7 @@ public class OSPartyPanel extends PluginPanel
 
 		SearchPanel searchPanel = new SearchPanel(partyService, playerNameSupplier,
 			friendsChatOwnerSupplier, worldSupplier, partyState, liveParty, accountTypeSupplier,
-			mapRegionsSupplier);
+			mapRegionsSupplier, worldRegionResolver);
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
 			accountTypeSupplier, mapRegionsSupplier);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,
@@ -80,8 +98,75 @@ public class OSPartyPanel extends PluginPanel
 
 		add(tabGroup, BorderLayout.NORTH);
 		add(display, BorderLayout.CENTER);
+		add(buildFooter(), BorderLayout.SOUTH);
 
 		partyState.addListener(this::onPartyStateChanged);
+	}
+
+	/**
+	 * Read the {@code version} from runelite-plugin.properties (placed on the
+	 * classpath by Gradle), so the footer always reflects the declared version.
+	 */
+	private static String readPluginVersion()
+	{
+		try (InputStream in = OSPartyPanel.class.getResourceAsStream("/runelite-plugin.properties"))
+		{
+			if (in != null)
+			{
+				Properties props = new Properties();
+				props.load(in);
+				String v = props.getProperty("version");
+				if (v != null && !v.trim().isEmpty())
+				{
+					return v.trim();
+				}
+			}
+		}
+		catch (Exception ignored)
+		{
+			// Fall through to the placeholder below.
+		}
+		return "?";
+	}
+
+	/** Footer: a GitHub link button on the left and the plugin version on the right. */
+	private JPanel buildFooter()
+	{
+		JPanel footer = new JPanel(new BorderLayout());
+		footer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		footer.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+
+		JButton github = new JButton();
+		github.setToolTipText("Open the OSParty GitHub page");
+		github.setFocusPainted(false);
+		github.setBorder(BorderFactory.createEmptyBorder());
+		github.setContentAreaFilled(false);
+		github.setCursor(new Cursor(Cursor.HAND_CURSOR));
+		github.setHorizontalAlignment(SwingConstants.LEFT);
+		BufferedImage logo = ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/github.png");
+		if (logo != null)
+		{
+			BufferedImage scaled = ImageUtil.resizeImage(logo, 16, 16);
+			github.setIcon(new ImageIcon(scaled));
+			github.setText(" GitHub");
+		}
+		else
+		{
+			github.setText("GitHub");
+		}
+		github.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		github.setFont(FontManager.getRunescapeSmallFont());
+		github.setPreferredSize(new Dimension(80, 20));
+		github.addActionListener(e -> LinkBrowser.browse(GITHUB_URL));
+		footer.add(github, BorderLayout.WEST);
+
+		JLabel version = new JLabel("v" + VERSION);
+		version.setHorizontalAlignment(SwingConstants.RIGHT);
+		version.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		version.setFont(FontManager.getRunescapeSmallFont());
+		footer.add(version, BorderLayout.EAST);
+
+		return footer;
 	}
 
 	/**

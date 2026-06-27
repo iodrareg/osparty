@@ -71,6 +71,11 @@ class CreatePanel extends JPanel
 	private final JSpinner hardKcSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 100_000, 10));
 	private JPanel hardKcField;
 
+	/** Shown in the status line while logged out; cleared once the player logs in. */
+	private static final String LOGIN_HINT = "Log in to create a party.";
+	/** True while a create request is in flight, so the form stays disabled. */
+	private boolean creating;
+
 	CreatePanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
 		PartyState partyState, LiveParty liveParty, Supplier<AccountType> accountTypeSupplier,
 		Supplier<int[]> mapRegionsSupplier)
@@ -153,6 +158,7 @@ class CreatePanel extends JPanel
 				// Re-read the configured default each time the tab is shown, so a
 				// changed "default party size" takes effect without a client restart.
 				applyDefaultCapacity();
+				updateLoginState();
 			}
 
 			@Override
@@ -171,6 +177,50 @@ class CreatePanel extends JPanel
 				applyRecommendation();
 			}
 		}).start();
+
+		// Re-check login state often so the form enables/disables promptly when the
+		// player logs in or out while this tab is open.
+		new Timer(1_000, e -> {
+			if (isShowing())
+			{
+				updateLoginState();
+			}
+		}).start();
+
+		updateLoginState();
+	}
+
+	/**
+	 * You can't host a party while logged out (no host name, no passphrase), so
+	 * disable the whole form until the player is logged in.
+	 */
+	private void updateLoginState()
+	{
+		boolean loggedIn = playerNameSupplier.get() != null;
+		setFormEnabled(loggedIn);
+		createButton.setEnabled(loggedIn && !creating);
+		if (!loggedIn)
+		{
+			setStatus(LOGIN_HINT);
+		}
+		else if (LOGIN_HINT.equals(statusLabel.getText()))
+		{
+			setStatus("");
+		}
+	}
+
+	/** Enable/disable every input on the form (the Create button is handled separately). */
+	private void setFormEnabled(boolean enabled)
+	{
+		activityDropdown.setEnabled(enabled);
+		capacitySpinner.setEnabled(enabled);
+		lootDropdown.setEnabled(enabled);
+		minKcSpinner.setEnabled(enabled);
+		hardKcSpinner.setEnabled(enabled);
+		worldField.setEnabled(enabled);
+		descriptionArea.setEnabled(enabled);
+		privateCheck.setEnabled(enabled);
+		ironmanCheck.setEnabled(enabled);
 	}
 
 	/**
@@ -348,6 +398,7 @@ class CreatePanel extends JPanel
 			return;
 		}
 
+		creating = true;
 		createButton.setEnabled(false);
 		setStatus("Creating party...");
 
@@ -361,6 +412,7 @@ class CreatePanel extends JPanel
 			partyService.createParty(request,
 				party -> SwingUtilities.invokeLater(() -> onCreated(party, passphrase, player, capacity)),
 				error -> SwingUtilities.invokeLater(() -> {
+					creating = false;
 					createButton.setEnabled(true);
 					setStatus("Create failed: " + error.getMessage());
 				}));
@@ -369,6 +421,7 @@ class CreatePanel extends JPanel
 
 	private void onCreated(Party party, String passphrase, String host, int capacity)
 	{
+		creating = false;
 		createButton.setEnabled(true);
 		descriptionArea.setText("");
 		// Host the live room now that the ad is up; applicants who join are pending

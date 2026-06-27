@@ -2,6 +2,7 @@ package net.osparty;
 
 import net.osparty.api.PartyApiClient;
 import net.osparty.api.PartyService;
+import net.osparty.combat.DefenceTracker;
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
 import net.osparty.model.Party;
@@ -9,15 +10,20 @@ import net.osparty.party.FcRequestMessage;
 import net.osparty.party.LiveParty;
 import net.osparty.party.MemberCommand;
 import net.osparty.party.PartyStateMessage;
+import net.osparty.party.PingMessage;
 import net.osparty.party.PlayerUpdate;
 import net.osparty.party.ReadyCheckMessage;
 import net.osparty.runewatch.RuneWatchService;
 import net.osparty.ui.OSPartyPanel;
 import net.osparty.ui.ApplicantOverlay;
 import net.osparty.ui.FcRequestOverlay;
+import net.osparty.ui.DefenceInfoBox;
+import net.osparty.ui.NpcDefenceOverlay;
 import net.osparty.ui.ReadyCheckOverlay;
+import net.osparty.ui.TilePingOverlay;
 import com.google.inject.Provides;
 import java.awt.Color;
+import java.awt.event.MouseEvent;
 import java.time.temporal.ChronoUnit;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
@@ -27,6 +33,9 @@ import net.runelite.api.Client;
 import net.runelite.api.FriendsChatManager;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
+import net.runelite.api.Tile;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
@@ -38,20 +47,29 @@ import net.runelite.api.World;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.input.KeyManager;
+import net.runelite.client.input.MouseAdapter;
+import net.runelite.client.input.MouseManager;
+import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.game.chatbox.ChatboxPanelManager;
 import net.runelite.client.game.WorldService;
 import net.runelite.client.util.WorldUtil;
+import net.runelite.http.api.worlds.WorldRegion;
 import net.runelite.http.api.worlds.WorldResult;
 import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.PluginInstantiationException;
+import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.plugins.specialcounter.SpecialCounterUpdate;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.ImageUtil;
 
@@ -103,6 +121,21 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private AudioPlayer audioPlayer;
 
 	@Inject
+	private KeyManager keyManager;
+
+	@Inject
+	private MouseManager mouseManager;
+
+	@Inject
+	private DefenceTracker defenceTracker;
+
+	@Inject
+	private InfoBoxManager infoBoxManager;
+
+	@Inject
+	private PluginManager pluginManager;
+
+	@Inject
 	private OSPartyConfig config;
 
 	private OSPartyPanel panel;
@@ -110,6 +143,45 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private ApplicantOverlay applicantOverlay;
 	private FcRequestOverlay fcRequestOverlay;
 	private ReadyCheckOverlay readyCheckOverlay;
+	private TilePingOverlay tilePingOverlay;
+	private NpcDefenceOverlay defenceOverlay;
+	/** Status-bar defence info box, present only while tracking and the toggle is on. */
+	private DefenceInfoBox defenceBox;
+
+	/** True while the ping hotkey is held; a left-click then pings the hovered tile. */
+	private volatile boolean pingHotkeyDown;
+
+	/** Holding the ping hotkey arms a tile ping on the next left-click. */
+	private final HotkeyListener pingHotkeyListener = new HotkeyListener(() -> config.pingHotkey())
+	{
+		@Override
+		public void hotkeyPressed()
+		{
+			pingHotkeyDown = true;
+		}
+
+		@Override
+		public void hotkeyReleased()
+		{
+			pingHotkeyDown = false;
+		}
+	};
+
+	/** Consumes the hotkey+left-click and pings the tile under the cursor instead. */
+	private final MouseAdapter pingMouseListener = new MouseAdapter()
+	{
+		@Override
+		public MouseEvent mousePressed(MouseEvent event)
+		{
+			if (pingHotkeyDown && config.pings() && javax.swing.SwingUtilities.isLeftMouseButton(event)
+				&& liveParty.isConnected())
+			{
+				pingHoveredTile();
+				event.consume();
+			}
+			return event;
+		}
+	};
 
 	/**
 	 * Last known logged in player name. Updated on the client thread and read
@@ -169,6 +241,19 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		readyCheckOverlay = new ReadyCheckOverlay(liveParty);
 		overlayManager.add(readyCheckOverlay);
 
+		tilePingOverlay = new TilePingOverlay(client, liveParty, config);
+		overlayManager.add(tilePingOverlay);
+
+		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config);
+		overlayManager.add(defenceOverlay);
+		// The defence tracker reads RuneLite's Special Attack Counter events, which
+		// only fire while that plugin is running, so make sure it's enabled.
+		enablePluginByName("Special Attack Counter");
+
+		// Hotkey + click to ping a tile for the party.
+		keyManager.registerKeyListener(pingHotkeyListener);
+		mouseManager.registerMouseListener(pingMouseListener);
+
 		// Ready-check notifications: a chat ping when one starts/expires, and a chat
 		// line plus optional sound when everyone is ready.
 		liveParty.setOnReadyCheckStarted(starter -> {
@@ -195,7 +280,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		panel = new OSPartyPanel(partyService, config, this::getPlayerName, this,
 			this::getFriendsChatOwner, this::getCurrentWorld, itemManager, liveParty, runeWatchService,
-			this::getAccountType, killcountService, skillIconManager, this::hopTo, this::getMapRegions);
+			this::getAccountType, killcountService, skillIconManager, this::hopTo, this::getMapRegions,
+			this::regionForWorld);
 
 		navButton = NavigationButton.builder()
 			.tooltip("OSParty")
@@ -205,7 +291,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 			.build();
 
 		clientToolbar.addNavigation(navButton);
-		log.info("OSParty started (API {})", config.apiBaseUrl());
+		log.info("OSParty started (API {})", PartyApiClient.apiBaseUrl());
 	}
 
 	@Override
@@ -213,13 +299,26 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	{
 		liveParty.leave();
 		liveParty.unregister();
+		keyManager.unregisterKeyListener(pingHotkeyListener);
+		mouseManager.unregisterMouseListener(pingMouseListener);
+		pingHotkeyDown = false;
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(applicantOverlay);
 		overlayManager.remove(fcRequestOverlay);
 		overlayManager.remove(readyCheckOverlay);
+		overlayManager.remove(tilePingOverlay);
+		overlayManager.remove(defenceOverlay);
+		if (defenceBox != null)
+		{
+			infoBoxManager.removeInfoBox(defenceBox);
+			defenceBox = null;
+		}
+		defenceTracker.reset();
 		applicantOverlay = null;
 		fcRequestOverlay = null;
 		readyCheckOverlay = null;
+		tilePingOverlay = null;
+		defenceOverlay = null;
 		panel = null;
 		navButton = null;
 		playerName = null;
@@ -288,6 +387,59 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		// Push pending host state / our own live snapshot (client thread).
 		liveParty.tick();
+
+		// Apply this tick's defence-draining specs and clear dead targets.
+		defenceTracker.onGameTick();
+		updateDefenceInfoBox();
+	}
+
+	/** Show/hide the status-bar defence info box based on the toggle and tracking state. */
+	private void updateDefenceInfoBox()
+	{
+		boolean show = config.defenceInfoBox() && defenceTracker.state() != null;
+		if (show && defenceBox == null)
+		{
+			defenceBox = new DefenceInfoBox(skillIconManager.getSkillImage(Skill.DEFENCE), this,
+				defenceTracker, config);
+			infoBoxManager.addInfoBox(defenceBox);
+		}
+		else if (!show && defenceBox != null)
+		{
+			infoBoxManager.removeInfoBox(defenceBox);
+			defenceBox = null;
+		}
+	}
+
+	@Subscribe
+	public void onSpecialCounterUpdate(SpecialCounterUpdate event)
+	{
+		// Fired by RuneLite's Special Attack Counter for our own and party members'
+		// special attacks; the tracker turns the draining ones into a defence figure.
+		defenceTracker.queue(event);
+	}
+
+	/** Enable a sibling RuneLite plugin by display name (used for a hard dependency). */
+	private void enablePluginByName(String name)
+	{
+		try
+		{
+			for (Plugin plugin : pluginManager.getPlugins())
+			{
+				if (name.equals(plugin.getName()))
+				{
+					if (!pluginManager.isPluginEnabled(plugin))
+					{
+						pluginManager.setPluginEnabled(plugin, true);
+						pluginManager.startPlugin(plugin);
+					}
+					return;
+				}
+			}
+		}
+		catch (PluginInstantiationException e)
+		{
+			log.warn("OSParty: could not enable '{}' plugin", name, e);
+		}
 	}
 
 	@Subscribe
@@ -330,6 +482,32 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	}
 
 	@Subscribe
+	public void onPingMessage(PingMessage event)
+	{
+		liveParty.onPing(event);
+	}
+
+	/**
+	 * Read the tile currently under the cursor (client thread) and broadcast a
+	 * ping there in the configured colour. Called from the AWT mouse listener.
+	 */
+	private void pingHoveredTile()
+	{
+		clientThread.invoke(() -> {
+			Tile tile = client.getSelectedSceneTile();
+			if (tile == null)
+			{
+				return;
+			}
+			WorldPoint point = tile.getWorldLocation();
+			if (point != null)
+			{
+				liveParty.sendPing(point, config.pingColor());
+			}
+		});
+	}
+
+	@Subscribe
 	public void onReadyCheckMessage(ReadyCheckMessage event)
 	{
 		liveParty.onReadyCheck(event);
@@ -338,7 +516,11 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	@Subscribe
 	public void onFcRequestMessage(FcRequestMessage event)
 	{
-		// Only show the popup if this request is aimed at us.
+		// Only show the popup if this request is aimed at us, and we accept them.
+		if (!config.receiveFriendsChatRequests())
+		{
+			return;
+		}
 		if (!liveParty.isForLocalMember(event.getTargetMemberId()))
 		{
 			return;
@@ -423,6 +605,26 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	public int[] getMapRegions()
 	{
 		return mapRegions;
+	}
+
+	/**
+	 * Resolve a world number to its geographic {@link WorldRegion} (for the flag
+	 * shown on a party ad), or null when the world list isn't loaded yet or the
+	 * world is unknown. Reads the cached world list, so it's safe from the EDT.
+	 */
+	public WorldRegion regionForWorld(int worldNum)
+	{
+		if (worldNum <= 0)
+		{
+			return null;
+		}
+		WorldResult worlds = worldService.getWorlds();
+		if (worlds == null)
+		{
+			return null;
+		}
+		net.runelite.http.api.worlds.World world = worlds.findWorld(worldNum);
+		return world != null ? world.getRegion() : null;
 	}
 
 	/** @return the local player's account type, or null when not logged in. Safe from the EDT. */
