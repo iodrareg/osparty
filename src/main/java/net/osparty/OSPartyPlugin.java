@@ -20,7 +20,6 @@ import com.google.inject.Provides;
 import java.awt.Color;
 import java.time.temporal.ChronoUnit;
 import javax.inject.Inject;
-import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -49,8 +48,6 @@ import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.plugins.PluginInstantiationException;
-import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
@@ -97,12 +94,6 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private KillcountService killcountService;
 
 	@Inject
-	private ConfigManager configManager;
-
-	@Inject
-	private PluginManager pluginManager;
-
-	@Inject
 	private WorldService worldService;
 
 	@Inject
@@ -113,9 +104,6 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 	@Inject
 	private OSPartyConfig config;
-
-	/** Config key storing whether the user has consented to data sharing. */
-	private static final String CONSENT_KEY = "dataShareConsent";
 
 	private OSPartyPanel panel;
 	private NavigationButton navButton;
@@ -218,65 +206,6 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		clientToolbar.addNavigation(navButton);
 		log.info("OSParty started (API {})", config.apiBaseUrl());
-
-		// First activation: require explicit consent before any data leaves the
-		// client (party ads are posted to a public API). Persisted, so shown once.
-		if (!hasConsent())
-		{
-			SwingUtilities.invokeLater(this::promptForConsent);
-		}
-	}
-
-	private boolean hasConsent()
-	{
-		return Boolean.TRUE.equals(
-			configManager.getConfiguration(OSPartyConfig.GROUP, CONSENT_KEY, Boolean.class));
-	}
-
-	/**
-	 * Ask the user to consent to sharing party data with the public API. On
-	 * decline the plugin disables itself (it can't function without it). Runs on
-	 * the EDT; the dialog is modal so nothing is sent before they answer.
-	 */
-	private void promptForConsent()
-	{
-		String message = "<html><body style='width: 330px'>"
-			+ "<b>OSParty shares data with a public service.</b><br><br>"
-			+ "To advertise and find parties, OSParty sends your <b>player name</b> and the "
-			+ "<b>party details you enter</b> (activity, world, requirements and a join "
-			+ "passphrase) to a public party-listing API (<code>api.osparty.net</code>), and "
-			+ "exchanges live party data (gear, inventory, stats) over RuneLite's "
-			+ "peer-to-peer party network with people you group with.<br><br>"
-			+ "No data is sent until you create or join a party. Do you consent?"
-			+ "</body></html>";
-
-		int choice = JOptionPane.showConfirmDialog(panel, message,
-			"OSParty — data sharing consent", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-
-		if (choice == JOptionPane.YES_OPTION)
-		{
-			configManager.setConfiguration(OSPartyConfig.GROUP, CONSENT_KEY, true);
-			log.info("OSParty data-sharing consent granted.");
-		}
-		else
-		{
-			log.info("OSParty data-sharing consent declined — disabling the plugin.");
-			disableSelf();
-		}
-	}
-
-	/** Turn the plugin off (used when the user declines the data-sharing consent). */
-	private void disableSelf()
-	{
-		try
-		{
-			pluginManager.setPluginEnabled(this, false);
-			pluginManager.stopPlugin(this);
-		}
-		catch (PluginInstantiationException e)
-		{
-			log.warn("Failed to disable OSParty after declined consent", e);
-		}
 	}
 
 	@Override
