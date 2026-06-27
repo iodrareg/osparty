@@ -131,6 +131,8 @@ class CurrentPanel extends JPanel
 	private final Set<Long> notifiedPending = new HashSet<>();
 	/** Last occupancy we reported to the ad, to avoid redundant heartbeats. */
 	private int lastReportedSize = -1;
+	/** Last CoX layout we reported, so we push an extra heartbeat when it changes. */
+	private String lastReportedLayout;
 	/** memberId -> epoch millis until which the "Request FC" button is on cooldown. */
 	private final Map<Long, Long> fcRequestCooldown = new HashMap<>();
 	private static final long FC_REQUEST_COOLDOWN_MS = 10_000;
@@ -202,6 +204,22 @@ class CurrentPanel extends JPanel
 			}
 		}).start();
 
+		// The CoX layout fills in as the host explores the raid; push it promptly
+		// (rather than waiting for the 30s keep-alive) whenever it changes.
+		new Timer(3_000, e -> {
+			if (!partyState.isHost() || partyState.getCurrentParty() == null)
+			{
+				return;
+			}
+			String layout = currentLayout();
+			if (layout != null && !layout.equals(lastReportedLayout))
+			{
+				lastReportedLayout = layout;
+				partyService.heartbeat(partyState.getCurrentParty().getId(), currentPartySize(),
+					currentWorld.getAsInt(), layout, ok -> { }, err -> { });
+			}
+		}).start();
+
 		refresh();
 	}
 
@@ -243,6 +261,7 @@ class CurrentPanel extends JPanel
 			detailTab.clear();
 			notifiedPending.clear();
 			lastReportedSize = -1;
+			lastReportedLayout = null;
 			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
 			content.revalidate();
 			content.repaint();

@@ -2,7 +2,7 @@ package net.osparty;
 
 import net.osparty.api.PartyApiClient;
 import net.osparty.api.PartyService;
-import net.osparty.combat.CoxLayout;
+import net.osparty.combat.CoxRaidScanner;
 import net.osparty.combat.DefenceTracker;
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
@@ -36,7 +36,6 @@ import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.api.Tile;
-import net.runelite.api.Varbits;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -130,6 +129,9 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 	@Inject
 	private DefenceTracker defenceTracker;
+
+	@Inject
+	private CoxRaidScanner coxRaidScanner;
 
 	@Inject
 	private InfoBoxManager infoBoxManager;
@@ -387,19 +389,10 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		FriendsChatManager fcm = client.getFriendsChatManager();
 		friendsChatOwner = fcm != null ? fcm.getOwner() : null;
 
-		// Read the CoX raid layout once per raid (the scene scan is comparatively
-		// heavy); clear it when we leave the raid so a new raid recomputes.
-		if (client.getVarbitValue(Varbits.IN_RAID) == 1)
-		{
-			if (coxLayout == null)
-			{
-				coxLayout = CoxLayout.compute(client);
-			}
-		}
-		else if (coxLayout != null)
-		{
-			coxLayout = null;
-		}
+		// Accumulate the CoX raid layout each tick as the player explores (a single
+		// scan can't see the whole raid), so it keeps filling in and updating.
+		coxRaidScanner.update();
+		coxLayout = coxRaidScanner.layout();
 
 		// Drive any in-progress world hop (needs the client thread).
 		processQuickHop();
