@@ -12,8 +12,6 @@ import java.awt.BorderLayout;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.image.BufferedImage;
-import java.io.InputStream;
-import java.util.Properties;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
@@ -45,7 +43,10 @@ import net.runelite.client.util.LinkBrowser;
  */
 public class OSPartyPanel extends PluginPanel
 {
-	private static final String VERSION = readPluginVersion();
+	// Hard-coded: PluginHub's build doesn't bundle runelite-plugin.properties, so
+	// reading the version from the classpath there yields "?". Keep this in step
+	// with runelite-plugin.properties on each release.
+	private static final String VERSION = "1.0.2";
 	private static final String GITHUB_URL = "https://github.com/iodrareg/osparty";
 
 	private final PartyState partyState = new PartyState();
@@ -105,30 +106,6 @@ public class OSPartyPanel extends PluginPanel
 		partyState.addListener(this::onPartyStateChanged);
 	}
 
-	/**
-	 * Read the {@code version} from runelite-plugin.properties (placed on the
-	 * classpath by Gradle), so the footer always reflects the declared version.
-	 */
-	private static String readPluginVersion()
-	{
-		try (InputStream in = OSPartyPanel.class.getResourceAsStream("/runelite-plugin.properties"))
-		{
-			if (in != null)
-			{
-				Properties props = new Properties();
-				props.load(in);
-				String v = props.getProperty("version");
-				if (v != null && !v.trim().isEmpty())
-				{
-					return v.trim();
-				}
-			}
-		}
-		catch (Exception ignored)
-		{
-		}
-		return "?";
-	}
 
 	private JPanel buildFooter()
 	{

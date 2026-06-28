@@ -12,14 +12,15 @@ import net.osparty.party.LiveParty;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Cursor;
+import java.awt.Font;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LayoutManager;
 import java.awt.Rectangle;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -54,6 +55,7 @@ import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.util.ImageUtil;
 import net.runelite.client.ui.FontManager;
 import net.runelite.http.api.worlds.WorldRegion;
 
@@ -90,6 +92,9 @@ class SearchPanel extends JPanel
 	/** Self-mark (not a role): tags us as a learner to the host when we apply. */
 	private final JCheckBox imLearnerCheck = new JCheckBox("I'm a learner");
 	private Activity recommended;
+	private boolean searchExpanded;
+	private final JButton searchToggle = new JButton();
+	private final JPanel searchContent = new JPanel();
 	private final JTextField textField = new JTextField();
 
 	private final JComboBox<String> lootFilter = new JComboBox<>(new String[]{"Any loot", "FFA", "Split"});
@@ -141,7 +146,6 @@ class SearchPanel extends JPanel
 		north.add(buildRoleFilter());
 		north.add(buildTextFilter());
 		north.add(buildControls());
-		north.add(buildFilters());
 		north.add(buildJoinByCode());
 		add(north, BorderLayout.NORTH);
 
@@ -238,7 +242,8 @@ class SearchPanel extends JPanel
 		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
 		JLabel label = new JLabel("Activities");
-		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setForeground(ColorScheme.BRAND_ORANGE);
+		label.setFont(label.getFont().deriveFont(Font.BOLD));
 		header.add(label, BorderLayout.WEST);
 
 		JPanel toggles = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
@@ -267,6 +272,43 @@ class SearchPanel extends JPanel
 		return panel;
 	}
 
+	/** RuneLite's config-section caret (grey), pointing right when collapsed / down when expanded. */
+	private static final ImageIcon CARET_COLLAPSED = caret(0);
+	private static final ImageIcon CARET_EXPANDED = caret(Math.PI / 2);
+
+	private static ImageIcon caret(double rotation)
+	{
+		BufferedImage arrow = ImageUtil.loadImageResource(SearchPanel.class, "/util/arrow_right.png");
+		if (arrow == null)
+		{
+			return null;
+		}
+		BufferedImage grey = ImageUtil.luminanceOffset(arrow, -121);
+		if (rotation != 0)
+		{
+			grey = ImageUtil.rotateImage(grey, rotation);
+		}
+		return new ImageIcon(grey);
+	}
+
+	/**
+	 * Style a collapsible section header like RuneLite's config sections: bold orange
+	 * title, a grey caret (set per state), and a separator line beneath. Hand cursor.
+	 */
+	private static void styleCollapsibleHeader(JButton toggle)
+	{
+		toggle.setHorizontalAlignment(SwingConstants.LEFT);
+		toggle.setFocusPainted(false);
+		toggle.setContentAreaFilled(false);
+		toggle.setForeground(ColorScheme.BRAND_ORANGE);
+		toggle.setFont(new JLabel().getFont().deriveFont(Font.BOLD));
+		toggle.setIconTextGap(6);
+		toggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		toggle.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(3, 0, 4, 0)));
+	}
+
 	/**
 	 * The role multiselect (ToB/CoX): tick the roles you're willing to fill; none
 	 * ticked means no role constraint. Collapses to a single header row to save space.
@@ -277,12 +319,7 @@ class SearchPanel extends JPanel
 		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
 		// Collapsible header: clicking it shows/hides the (fairly tall) tabbed picker.
-		roleToggle.setHorizontalAlignment(SwingConstants.LEFT);
-		roleToggle.setFocusPainted(false);
-		roleToggle.setContentAreaFilled(false);
-		roleToggle.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
-		roleToggle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		roleToggle.setFont(FontManager.getRunescapeSmallFont());
+		styleCollapsibleHeader(roleToggle);
 		roleToggle.addActionListener(e -> setRolesExpanded(!rolesExpanded));
 		panel.add(roleToggle, BorderLayout.NORTH);
 
@@ -334,10 +371,8 @@ class SearchPanel extends JPanel
 
 	private void updateRoleToggleText()
 	{
-		String count = selectedRoles.isEmpty() ? "" : " (" + selectedRoles.size() + ")";
-		// Plain ASCII chevron: ">" collapsed (points right), "v" expanded (points down) -
-		// the RuneScape font has no glyph for the Unicode triangles.
-		roleToggle.setText((rolesExpanded ? "v " : "> ") + "Roles I can fill" + count);
+		roleToggle.setIcon(rolesExpanded ? CARET_EXPANDED : CARET_COLLAPSED);
+		roleToggle.setText("Roles");
 	}
 
 	private JComponent buildRoleTab(Activity activity, boolean hardMode)
@@ -444,9 +479,10 @@ class SearchPanel extends JPanel
 		JPanel panel = cappedRow(new BorderLayout(0, 4));
 		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
-		JLabel label = new JLabel("Search text");
-		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		label.setFont(FontManager.getRunescapeSmallFont());
+		// Collapsible header, mirroring the roles section.
+		styleCollapsibleHeader(searchToggle);
+		searchToggle.addActionListener(e -> setSearchExpanded(!searchExpanded));
+		panel.add(searchToggle, BorderLayout.NORTH);
 
 		textField.setToolTipText("Filter by host, description or activity");
 		textField.getDocument().addDocumentListener(new DocumentListener()
@@ -470,9 +506,49 @@ class SearchPanel extends JPanel
 			}
 		});
 
-		panel.add(label, BorderLayout.NORTH);
-		panel.add(textField, BorderLayout.CENTER);
+		// The text field plus the loot and ironman filters all live under "Search".
+		lootFilter.addActionListener(e -> filtersChanged());
+		ironmanFilter.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		ironmanFilter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		ironmanFilter.setFocusPainted(false);
+		ironmanFilter.addActionListener(e -> filtersChanged());
+
+		searchContent.setLayout(new BoxLayout(searchContent, BoxLayout.Y_AXIS));
+		searchContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		searchContent.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		searchContent.add(searchRow(textField));
+		searchContent.add(searchRow(lootFilter));
+		searchContent.add(searchRow(ironmanFilter));
+		searchContent.setVisible(searchExpanded);
+		panel.add(searchContent, BorderLayout.CENTER);
+
+		updateSearchToggleText();
 		return panel;
+	}
+
+	/** One full-width, height-capped row in the Search content column. */
+	private static JPanel searchRow(Component control)
+	{
+		JPanel row = cappedRow(new BorderLayout());
+		row.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		row.add(control, BorderLayout.CENTER);
+		return row;
+	}
+
+	private void setSearchExpanded(boolean expanded)
+	{
+		searchExpanded = expanded;
+		searchContent.setVisible(expanded);
+		updateSearchToggleText();
+		persistFilters();
+		revalidate();
+		repaint();
+	}
+
+	private void updateSearchToggleText()
+	{
+		searchToggle.setIcon(searchExpanded ? CARET_EXPANDED : CARET_COLLAPSED);
+		searchToggle.setText("Search");
 	}
 
 	private void setAllActivities(boolean selected)
@@ -567,33 +643,6 @@ class SearchPanel extends JPanel
 		reapplyFilters();
 	}
 
-	private JPanel buildFilters()
-	{
-		lootFilter.addActionListener(e -> filtersChanged());
-
-		ironmanFilter.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		ironmanFilter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		ironmanFilter.setFocusPainted(false);
-		ironmanFilter.addActionListener(e -> filtersChanged());
-
-		// GridBagLayout centres each control within a full-width cell (weightx=1 +
-		// anchor CENTER) - robust regardless of the surrounding BoxLayout.
-		JPanel panel = cappedRow(new GridBagLayout());
-		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
-
-		GridBagConstraints c = new GridBagConstraints();
-		c.gridx = 0;
-		c.weightx = 1.0;
-		c.anchor = GridBagConstraints.CENTER;
-		c.gridy = 0;
-		c.insets = new Insets(0, 0, 4, 0);
-		panel.add(lootFilter, c);
-		c.gridy = 1;
-		c.insets = new Insets(0, 0, 0, 0);
-		panel.add(ironmanFilter, c);
-		return panel;
-	}
-
 	private JPanel buildJoinByCode()
 	{
 		JPanel panel = cappedRow(new BorderLayout(6, 4));
@@ -651,6 +700,7 @@ class SearchPanel extends JPanel
 	private static final String KEY_IRONMAN = "searchIronman";
 	private static final String KEY_LEARNER = "searchLearner";
 	private static final String KEY_ROLES_EXPANDED = "searchRolesExpanded";
+	private static final String KEY_SEARCH_EXPANDED = "searchTextExpanded";
 
 	/** Save the current filter selection so it's restored next session. */
 	private void persistFilters()
@@ -661,6 +711,7 @@ class SearchPanel extends JPanel
 		put(KEY_IRONMAN, Boolean.toString(ironmanFilter.isSelected()));
 		put(KEY_LEARNER, Boolean.toString(imLearnerCheck.isSelected()));
 		put(KEY_ROLES_EXPANDED, Boolean.toString(rolesExpanded));
+		put(KEY_SEARCH_EXPANDED, Boolean.toString(searchExpanded));
 	}
 
 	/** Restore the saved filter selection into the in-memory state and the controls. */
@@ -702,6 +753,7 @@ class SearchPanel extends JPanel
 		ironmanFilter.setSelected(Boolean.parseBoolean(get(KEY_IRONMAN)));
 		imLearnerCheck.setSelected(Boolean.parseBoolean(get(KEY_LEARNER)));
 		rolesExpanded = Boolean.parseBoolean(get(KEY_ROLES_EXPANDED));
+		searchExpanded = Boolean.parseBoolean(get(KEY_SEARCH_EXPANDED));
 	}
 
 	private static <T> String idsOf(Set<T> values, java.util.function.Function<T, String> id)
