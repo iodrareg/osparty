@@ -12,6 +12,7 @@ import java.awt.BorderLayout;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.image.BufferedImage;
+import java.util.Set;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
@@ -64,7 +65,8 @@ public class OSPartyPanel extends PluginPanel
 		KillcountService killcountService, SkillIconManager skillIconManager, IntConsumer worldHopper,
 		Supplier<int[]> mapRegionsSupplier, IntFunction<WorldRegion> worldRegionResolver,
 		Supplier<String> coxLayoutSupplier, ConfigManager configManager, Gson gson,
-		WorldPinger worldPinger, IntFunction<String> worldAddressResolver)
+		WorldPinger worldPinger, IntFunction<String> worldAddressResolver,
+		Supplier<Set<String>> friendNamesSupplier)
 	{
 		super(false);
 
@@ -80,7 +82,7 @@ public class OSPartyPanel extends PluginPanel
 		SearchPanel searchPanel = new SearchPanel(partyService, playerNameSupplier,
 			friendsChatOwnerSupplier, worldSupplier, partyState, liveParty, accountTypeSupplier,
 			mapRegionsSupplier, worldRegionResolver, killcountService, configManager,
-			worldPinger, worldAddressResolver);
+			worldPinger, worldAddressResolver, friendNamesSupplier);
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
 			accountTypeSupplier, mapRegionsSupplier, coxLayoutSupplier, configManager, gson);
 		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,

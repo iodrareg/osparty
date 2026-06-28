@@ -27,6 +27,7 @@ import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.event.MouseEvent;
 import java.time.temporal.ChronoUnit;
+import java.util.Set;
 import com.google.gson.Gson;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
@@ -212,6 +213,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private boolean rejoinChecked;
 
 	private WorldPinger worldPinger;
+	/** Snapshot of the local player's friends list, updated each game tick. */
+	private volatile Set<String> friendNames = java.util.Collections.emptySet();
 
 	/** Pending quick-hop target (driven on game ticks), or null when not hopping. */
 	private volatile net.runelite.http.api.worlds.World quickHopTarget;
@@ -304,7 +307,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 			this::getFriendsChatOwner, this::getCurrentWorld, itemManager, liveParty, runeWatchService,
 			this::getAccountType, killcountService, skillIconManager, this::hopTo, this::getMapRegions,
 			this::regionForWorld, this::getCoxLayout, configManager, gson,
-			worldPinger, this::worldAddressForNum);
+			worldPinger, this::worldAddressForNum, this::getFriendNames);
 
 		navButton = NavigationButton.builder()
 			.tooltip("OSParty")
@@ -408,6 +411,22 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 
 		FriendsChatManager fcm = client.getFriendsChatManager();
 		friendsChatOwner = fcm != null ? fcm.getOwner() : null;
+
+		// Capture the full friends list for friends-first sorting in the Search panel.
+		net.runelite.api.NameableContainer<net.runelite.api.Friend> friendContainer = client.getFriendContainer();
+		if (friendContainer != null)
+		{
+			java.util.Set<String> names = new java.util.HashSet<>(friendContainer.getCount() * 2);
+			for (int i = 0; i < friendContainer.getCount(); i++)
+			{
+				net.runelite.api.Friend f = friendContainer.getMembers()[i];
+				if (f != null && f.getName() != null)
+				{
+					names.add(f.getName().replace('\u00A0', ' ').trim().toLowerCase());
+				}
+			}
+			friendNames = java.util.Collections.unmodifiableSet(names);
+		}
 
 		// Accumulate the CoX raid layout each tick as the player explores (a single
 		// scan can't see the whole raid), so it keeps filling in and updating.
@@ -685,6 +704,12 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		}
 		net.runelite.http.api.worlds.World world = worlds.findWorld(worldNum);
 		return world != null ? world.getAddress() : null;
+	}
+
+	/** @return the set of normalised (lowercase) friend names. Safe from any thread. */
+	public Set<String> getFriendNames()
+	{
+		return friendNames;
 	}
 
 	/** @return the local player's account type, or null when not logged in. Safe from the EDT. */

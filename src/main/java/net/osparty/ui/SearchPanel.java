@@ -23,6 +23,7 @@ import java.awt.LayoutManager;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -82,6 +83,35 @@ class SearchPanel extends JPanel
 		WorldRegion.SOUTH_AFRICA,
 	};
 
+	private static final class ActivityGroup
+	{
+		final String label;
+		final Activity[] activities;
+
+		ActivityGroup(String label, Activity... activities)
+		{
+			this.label = label;
+			this.activities = activities;
+		}
+	}
+
+	private static final ActivityGroup[] ACTIVITY_GROUPS = {
+		new ActivityGroup("Raids",
+			Activity.CHAMBERS_OF_XERIC, Activity.THEATRE_OF_BLOOD, Activity.TOMBS_OF_AMASCUT),
+		new ActivityGroup("Godwars",
+			Activity.KREEARRA, Activity.GENERAL_GRAARDOR, Activity.KRIL_TSUTSAROTH,
+			Activity.COMMANDER_ZILYANA),
+		new ActivityGroup("Other",
+			Activity.NEX, Activity.NIGHTMARE, Activity.CORPOREAL_BEAST, Activity.BARBARIAN_ASSAULT,
+			Activity.ZALCANO, Activity.HUEYCOATL, Activity.YAMA),
+	};
+
+	private static final String SORT_NEWEST = "Newest first";
+	private static final String SORT_OLDEST = "Oldest first";
+	private static final String SORT_PING   = "Lowest ping";
+	private static final String SORT_SPOTS  = "Most spots open";
+	private static final String SORT_FULL   = "Closest to full";
+
 	private final PartyService partyService;
 	private final Supplier<String> playerNameSupplier;
 	private final Supplier<String> friendsChatOwnerSupplier;
@@ -95,6 +125,7 @@ class SearchPanel extends JPanel
 	private final ConfigManager configManager;
 	private final WorldPinger worldPinger;
 	private final IntFunction<String> worldAddressResolver;
+	private final Supplier<Set<String>> friendNamesSupplier;
 
 	private final JPanel activityListPanel = new JPanel();
 	private final Set<Activity> selectedActivities = EnumSet.allOf(Activity.class);
@@ -119,6 +150,13 @@ class SearchPanel extends JPanel
 
 	private final JComboBox<String> lootFilter = new JComboBox<>(new String[]{"Any loot", "FFA", "Split"});
 	private final JCheckBox ironmanFilter = new JCheckBox("Ironman parties only");
+	private final JComboBox<String> learnerComboBox = new JComboBox<>(
+		new String[]{"Any", "Learner only", "Hide learner raids"});
+	private final JCheckBox hideIneligibleFilter = new JCheckBox("Hide parties I can't join");
+	private final JComboBox<String> sortComboBox = new JComboBox<>(
+		new String[]{SORT_NEWEST, SORT_OLDEST, SORT_PING, SORT_SPOTS, SORT_FULL});
+	private final JLabel activeFiltersLabel = new JLabel();
+	private final JButton resetButton = new JButton("Reset");
 	private final JTextField codeField = new JTextField();
 	private final JButton joinButton = new JButton("Join");
 	private final JButton searchButton = new JButton("Refresh");
@@ -139,7 +177,8 @@ class SearchPanel extends JPanel
 		Supplier<String> friendsChatOwnerSupplier, IntSupplier worldSupplier, PartyState partyState,
 		LiveParty liveParty, Supplier<AccountType> accountTypeSupplier, Supplier<int[]> mapRegionsSupplier,
 		IntFunction<WorldRegion> worldRegionResolver, KillcountService killcountService, ConfigManager configManager,
-		WorldPinger worldPinger, IntFunction<String> worldAddressResolver)
+		WorldPinger worldPinger, IntFunction<String> worldAddressResolver,
+		Supplier<Set<String>> friendNamesSupplier)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -154,6 +193,7 @@ class SearchPanel extends JPanel
 		this.configManager = configManager;
 		this.worldPinger = worldPinger;
 		this.worldAddressResolver = worldAddressResolver;
+		this.friendNamesSupplier = friendNamesSupplier;
 
 		// Restore the filters the player last used, before the UI is built from them.
 		loadFilters();
@@ -194,8 +234,7 @@ class SearchPanel extends JPanel
 		statusLabel.setFont(FontManager.getRunescapeSmallFont());
 		add(statusLabel, BorderLayout.SOUTH);
 
-		searchButton.setToolTipText("Refresh the list of open parties");
-		searchButton.addActionListener(e -> search());
+		updateActiveFiltersLabel();
 
 		// Auto-refresh every 10s while the tab is visible, and re-check whether we've
 		// moved near a different activity.
@@ -252,8 +291,39 @@ class SearchPanel extends JPanel
 	{
 		JPanel controls = cappedRow(new BorderLayout(0, 6));
 		controls.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+
+		// Sort row
+		JPanel sortRow = cappedRow(new BorderLayout(4, 0));
+		JLabel sortLabel = new JLabel("Sort");
+		sortLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		sortLabel.setFont(FontManager.getRunescapeSmallFont());
+		sortComboBox.addActionListener(e -> filtersChanged());
+		sortRow.add(sortLabel, BorderLayout.WEST);
+		sortRow.add(sortComboBox, BorderLayout.CENTER);
+
+		// Bottom row: active-filters badge + reset + refresh button
+		JPanel bottomRow = cappedRow(new BorderLayout(4, 0));
+		activeFiltersLabel.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
+		activeFiltersLabel.setFont(FontManager.getRunescapeSmallFont());
+		resetButton.setFocusPainted(false);
+		resetButton.setFont(FontManager.getRunescapeSmallFont());
+		resetButton.setToolTipText("Clear all filters");
+		resetButton.addActionListener(e -> resetAllFilters());
+
+		JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		badgePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		badgePanel.add(activeFiltersLabel);
+		badgePanel.add(resetButton);
+
 		searchButton.setFocusPainted(false);
-		controls.add(searchButton, BorderLayout.CENTER);
+		searchButton.setToolTipText("Refresh the list of open parties");
+		searchButton.addActionListener(e -> search());
+
+		bottomRow.add(badgePanel, BorderLayout.WEST);
+		bottomRow.add(searchButton, BorderLayout.EAST);
+
+		controls.add(sortRow, BorderLayout.NORTH);
+		controls.add(bottomRow, BorderLayout.CENTER);
 		return controls;
 	}
 
@@ -530,12 +600,21 @@ class SearchPanel extends JPanel
 			}
 		});
 
-		// The text field plus the loot and ironman filters all live under "Search".
+		// The text field plus loot, ironman, learner and hide-ineligible filters live under "Search".
 		lootFilter.addActionListener(e -> filtersChanged());
 		ironmanFilter.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		ironmanFilter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		ironmanFilter.setFocusPainted(false);
 		ironmanFilter.addActionListener(e -> filtersChanged());
+
+		learnerComboBox.setToolTipText("Filter by learner-raid status");
+		learnerComboBox.addActionListener(e -> filtersChanged());
+
+		hideIneligibleFilter.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		hideIneligibleFilter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		hideIneligibleFilter.setFocusPainted(false);
+		hideIneligibleFilter.setToolTipText("Hide parties you can't join due to ironman rule or KC requirement");
+		hideIneligibleFilter.addActionListener(e -> filtersChanged());
 
 		maxPingField.setToolTipText("Hide parties whose world ping exceeds this threshold (ms). Leave blank for no limit.");
 		maxPingField.getDocument().addDocumentListener(new DocumentListener()
@@ -567,12 +646,22 @@ class SearchPanel extends JPanel
 		maxPingRow.add(maxPingLabel, BorderLayout.WEST);
 		maxPingRow.add(maxPingField, BorderLayout.CENTER);
 
+		JLabel learnerLabel = new JLabel("Learner raids");
+		learnerLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		learnerLabel.setFont(FontManager.getRunescapeSmallFont());
+		JPanel learnerRow = new JPanel(new BorderLayout(4, 0));
+		learnerRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		learnerRow.add(learnerLabel, BorderLayout.WEST);
+		learnerRow.add(learnerComboBox, BorderLayout.CENTER);
+
 		searchContent.setLayout(new BoxLayout(searchContent, BoxLayout.Y_AXIS));
 		searchContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		searchContent.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
 		searchContent.add(searchRow(textField));
 		searchContent.add(searchRow(lootFilter));
 		searchContent.add(searchRow(ironmanFilter));
+		searchContent.add(searchRow(learnerRow));
+		searchContent.add(searchRow(hideIneligibleFilter));
 		searchContent.add(searchRow(maxPingRow));
 		searchContent.setVisible(searchExpanded);
 		panel.add(searchContent, BorderLayout.CENTER);
@@ -750,53 +839,79 @@ class SearchPanel extends JPanel
 		return button;
 	}
 
-	/** Rebuild the checkbox list, recommended activity first and pre-checked. */
+	/** Rebuild the grouped checkbox list. The nearby activity is highlighted in its group. */
 	private void rebuildActivityList()
 	{
 		activityListPanel.removeAll();
-		for (Activity activity : orderedActivities())
+		for (ActivityGroup group : ACTIVITY_GROUPS)
 		{
-			boolean nearby = activity == recommended;
-			JCheckBox box = new JCheckBox(activity.getDisplayName() + (nearby ? "  (nearby)" : ""));
-			box.setSelected(selectedActivities.contains(activity));
-			box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			box.setForeground(nearby ? ColorScheme.BRAND_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
-			box.setFont(FontManager.getRunescapeSmallFont());
-			box.setFocusPainted(false);
-			box.setAlignmentX(Component.LEFT_ALIGNMENT);
-			box.addActionListener(e -> {
-				if (box.isSelected())
-				{
-					selectedActivities.add(activity);
-				}
-				else
-				{
-					selectedActivities.remove(activity);
-				}
-				filtersChanged();
-			});
-			activityListPanel.add(box);
+			// Group header: label + per-group All / None toggles.
+			JPanel header = cappedRow(new BorderLayout(4, 0));
+			header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			header.setBorder(BorderFactory.createCompoundBorder(
+				BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+				BorderFactory.createEmptyBorder(2, 4, 2, 4)));
+
+			JLabel groupLabel = new JLabel(group.label);
+			groupLabel.setForeground(ColorScheme.BRAND_ORANGE);
+			groupLabel.setFont(new JLabel().getFont().deriveFont(Font.BOLD).deriveFont(9f));
+			header.add(groupLabel, BorderLayout.WEST);
+
+			JPanel headerButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+			headerButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			JButton allBtn = miniButton("All");
+			allBtn.addActionListener(e -> setActivitiesInGroup(group, true));
+			JButton noneBtn = miniButton("None");
+			noneBtn.addActionListener(e -> setActivitiesInGroup(group, false));
+			headerButtons.add(allBtn);
+			headerButtons.add(noneBtn);
+			header.add(headerButtons, BorderLayout.EAST);
+			activityListPanel.add(header);
+
+			// Activity checkboxes
+			for (Activity activity : group.activities)
+			{
+				boolean nearby = activity == recommended;
+				JCheckBox box = new JCheckBox(activity.getDisplayName() + (nearby ? "  (nearby)" : ""));
+				box.setSelected(selectedActivities.contains(activity));
+				box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				box.setForeground(nearby ? ColorScheme.BRAND_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
+				box.setFont(FontManager.getRunescapeSmallFont());
+				box.setFocusPainted(false);
+				box.setAlignmentX(Component.LEFT_ALIGNMENT);
+				box.addActionListener(e -> {
+					if (box.isSelected())
+					{
+						selectedActivities.add(activity);
+					}
+					else
+					{
+						selectedActivities.remove(activity);
+					}
+					filtersChanged();
+				});
+				activityListPanel.add(box);
+			}
 		}
 		activityListPanel.revalidate();
 		activityListPanel.repaint();
 	}
 
-	/** Activities with the nearby one (if any) floated to the top. */
-	private List<Activity> orderedActivities()
+	private void setActivitiesInGroup(ActivityGroup group, boolean selected)
 	{
-		List<Activity> ordered = new ArrayList<>();
-		if (recommended != null)
+		for (Activity a : group.activities)
 		{
-			ordered.add(recommended);
-		}
-		for (Activity activity : Activity.values())
-		{
-			if (activity != recommended)
+			if (selected)
 			{
-				ordered.add(activity);
+				selectedActivities.add(a);
+			}
+			else
+			{
+				selectedActivities.remove(a);
 			}
 		}
-		return ordered;
+		rebuildActivityList();
+		filtersChanged();
 	}
 
 	/**
@@ -865,21 +980,25 @@ class SearchPanel extends JPanel
 	private void filtersChanged()
 	{
 		persistFilters();
+		updateActiveFiltersLabel();
 		reapplyFilters();
 	}
 
 	// ---- filter persistence (remembered across sessions) ---------------------
 
-	private static final String KEY_ACTIVITIES = "searchActivities";
-	private static final String KEY_ROLES = "searchRoles";
-	private static final String KEY_LOOT = "searchLoot";
-	private static final String KEY_IRONMAN = "searchIronman";
-	private static final String KEY_LEARNER = "searchLearner";
-	private static final String KEY_ROLES_EXPANDED = "searchRolesExpanded";
-	private static final String KEY_SEARCH_EXPANDED = "searchTextExpanded";
-	private static final String KEY_REGIONS = "searchRegions";
-	private static final String KEY_REGIONS_EXPANDED = "searchRegionsExpanded";
-	private static final String KEY_MAX_PING = "searchMaxPing";
+	private static final String KEY_ACTIVITIES        = "searchActivities";
+	private static final String KEY_ROLES             = "searchRoles";
+	private static final String KEY_LOOT              = "searchLoot";
+	private static final String KEY_IRONMAN           = "searchIronman";
+	private static final String KEY_LEARNER           = "searchLearner";
+	private static final String KEY_ROLES_EXPANDED    = "searchRolesExpanded";
+	private static final String KEY_SEARCH_EXPANDED   = "searchTextExpanded";
+	private static final String KEY_REGIONS           = "searchRegions";
+	private static final String KEY_REGIONS_EXPANDED  = "searchRegionsExpanded";
+	private static final String KEY_MAX_PING          = "searchMaxPing";
+	private static final String KEY_SORT              = "searchSort";
+	private static final String KEY_LEARNER_FILTER    = "searchLearnerFilter";
+	private static final String KEY_HIDE_INELIGIBLE   = "searchHideIneligible";
 
 	/** Save the current filter selection so it's restored next session. */
 	private void persistFilters()
@@ -907,6 +1026,9 @@ class SearchPanel extends JPanel
 		put(KEY_REGIONS, regionsStr.toString());
 		put(KEY_REGIONS_EXPANDED, Boolean.toString(regionsExpanded));
 		put(KEY_MAX_PING, maxPingField.getText().trim());
+		put(KEY_SORT, (String) sortComboBox.getSelectedItem());
+		put(KEY_LEARNER_FILTER, (String) learnerComboBox.getSelectedItem());
+		put(KEY_HIDE_INELIGIBLE, Boolean.toString(hideIneligibleFilter.isSelected()));
 	}
 
 	/** Restore the saved filter selection into the in-memory state and the controls. */
@@ -974,6 +1096,17 @@ class SearchPanel extends JPanel
 		{
 			maxPingField.setText(maxPing);
 		}
+		String sort = get(KEY_SORT);
+		if (sort != null)
+		{
+			sortComboBox.setSelectedItem(sort);
+		}
+		String learnerFilter = get(KEY_LEARNER_FILTER);
+		if (learnerFilter != null)
+		{
+			learnerComboBox.setSelectedItem(learnerFilter);
+		}
+		hideIneligibleFilter.setSelected(Boolean.parseBoolean(get(KEY_HIDE_INELIGIBLE)));
 	}
 
 	private static <T> String idsOf(Set<T> values, java.util.function.Function<T, String> id)
@@ -1142,9 +1275,10 @@ class SearchPanel extends JPanel
 	private void search()
 	{
 		String player = playerNameSupplier.get();
-		// Fetch every open party; we filter client-side by the checked activities,
-		// loot, ironman and free text. No pre-clear, so refreshes don't flicker.
-		partyService.searchParties(null, player,
+		// When exactly one activity is selected, pass it so the server pre-filters
+		// the result set; otherwise fetch everything and filter client-side.
+		Activity single = selectedActivities.size() == 1 ? selectedActivities.iterator().next() : null;
+		partyService.searchParties(single, player,
 			parties -> SwingUtilities.invokeLater(() -> showResults(parties)),
 			error -> SwingUtilities.invokeLater(() -> setStatus("Refresh failed: " + error.getMessage())));
 	}
@@ -1155,6 +1289,8 @@ class SearchPanel extends JPanel
 
 		LootRule wantLoot = lootFilterValue();
 		boolean ironOnly = ironmanFilter.isSelected();
+		boolean hideIneligible = hideIneligibleFilter.isSelected();
+		int learnerIdx = learnerComboBox.getSelectedIndex(); // 0=Any, 1=Learner only, 2=Hide learner
 		String text = textField.getText().trim().toLowerCase();
 		int maxPing = parseMaxPing();
 
@@ -1191,6 +1327,28 @@ class SearchPanel extends JPanel
 				if (ironOnly && !party.isIronmanOnly())
 				{
 					continue;
+				}
+				// Learner-raid filter (feature 6).
+				if (learnerIdx == 1 && !party.isLearnerRaid())
+				{
+					continue; // "Learner only" — hide non-learner parties
+				}
+				if (learnerIdx == 2 && party.isLearnerRaid())
+				{
+					continue; // "Hide learner raids" — hide learner parties
+				}
+				// Hide-ineligible filter (feature 5): skip parties the player can't join.
+				// A PENDING KC check is never treated as BELOW — don't over-filter.
+				if (hideIneligible)
+				{
+					if (!meetsIronmanRule(party))
+					{
+						continue;
+					}
+					if (kcStatus(party) == KcStatus.BELOW)
+					{
+						continue;
+					}
 				}
 				if (!matchesRoleFilter(party, act))
 				{
@@ -1229,6 +1387,23 @@ class SearchPanel extends JPanel
 			}
 		}
 
+		// Sort the visible list by the chosen order, then float friends to the top.
+		Comparator<Party> comp = buildComparator();
+		if (friendNamesSupplier != null)
+		{
+			Set<String> friends = friendNamesSupplier.get();
+			if (friends != null && !friends.isEmpty())
+			{
+				Comparator<Party> friendFirst = Comparator.comparingInt(
+					(Party p) -> {
+						String key = p.getHost() == null ? "" : normalize(p.getHost()).toLowerCase();
+						return friends.contains(key) ? 0 : 1;
+					});
+				comp = friendFirst.thenComparing(comp);
+			}
+		}
+		visible.sort(comp);
+
 		// Request pings for all visible parties. No-op if already cached or in flight.
 		if (worldPinger != null)
 		{
@@ -1246,7 +1421,11 @@ class SearchPanel extends JPanel
 
 		// Skip the rebuild (and its flicker) when nothing rendered would change.
 		String signature = selectedSignature() + "|" + roleSignature() + "|" + regionSignature() + "|"
-			+ maxPingField.getText().trim() + "|" + text + "|" + pingSignatureOf(visible) + "|" + signatureOf(visible);
+			+ maxPingField.getText().trim() + "|" + text + "|" + pingSignatureOf(visible) + "|" + signatureOf(visible)
+			+ "|s" + sortComboBox.getSelectedIndex()
+			+ "|l" + learnerComboBox.getSelectedIndex()
+			+ "|h" + hideIneligibleFilter.isSelected()
+			+ "|f" + friendSignatureOf(visible);
 		if (signature.equals(renderedSignature))
 		{
 			return;
@@ -1650,6 +1829,161 @@ class SearchPanel extends JPanel
 			}
 		}
 		return sb.toString();
+	}
+
+	/** Build a sort comparator for the chosen sort order. */
+	private Comparator<Party> buildComparator()
+	{
+		String selected = (String) sortComboBox.getSelectedItem();
+		if (selected == null)
+		{
+			selected = SORT_NEWEST;
+		}
+		switch (selected)
+		{
+			case SORT_OLDEST:
+				return Comparator.comparingLong(Party::getCreatedAt);
+			case SORT_PING:
+				return (a, b) -> Integer.compare(pingForSort(a), pingForSort(b));
+			case SORT_SPOTS:
+				return (a, b) -> {
+					int slotsA = a.getCapacity() > 0 ? a.getCapacity() - a.getSize() : -1;
+					int slotsB = b.getCapacity() > 0 ? b.getCapacity() - b.getSize() : -1;
+					return Integer.compare(slotsB, slotsA); // descending
+				};
+			case SORT_FULL:
+				return (a, b) -> {
+					float fa = a.getCapacity() > 0 ? (float) a.getSize() / a.getCapacity() : 0f;
+					float fb = b.getCapacity() > 0 ? (float) b.getSize() / b.getCapacity() : 0f;
+					return Float.compare(fb, fa); // descending
+				};
+			default: // SORT_NEWEST
+				return (a, b) -> Long.compare(b.getCreatedAt(), a.getCreatedAt());
+		}
+	}
+
+	/** Ping value used for sorting: unknown near-last, unreachable last. */
+	private int pingForSort(Party party)
+	{
+		Integer wn = parseWorldNum(party);
+		if (wn == null || worldPinger == null)
+		{
+			return Integer.MAX_VALUE - 1;
+		}
+		Integer ping = worldPinger.getCachedPing(wn);
+		if (ping == null)
+		{
+			return Integer.MAX_VALUE - 1; // not yet measured
+		}
+		return ping < 0 ? Integer.MAX_VALUE : ping; // unreachable → absolute last
+	}
+
+	/** Signature of which visible-party hosts are friends, so sort changes trigger a re-render. */
+	private String friendSignatureOf(List<Party> parties)
+	{
+		if (friendNamesSupplier == null)
+		{
+			return "";
+		}
+		Set<String> friends = friendNamesSupplier.get();
+		if (friends == null || friends.isEmpty())
+		{
+			return "";
+		}
+		StringBuilder sb = new StringBuilder();
+		for (Party p : parties)
+		{
+			String key = p.getHost() == null ? "" : normalize(p.getHost()).toLowerCase();
+			if (friends.contains(key))
+			{
+				sb.append(p.getId()).append(',');
+			}
+		}
+		return sb.toString();
+	}
+
+	/** Count the number of non-default filters currently active. */
+	private int countActiveFilters()
+	{
+		int count = 0;
+		if (selectedActivities.size() < Activity.values().length)
+		{
+			count++;
+		}
+		if (!selectedRoles.isEmpty())
+		{
+			count++;
+		}
+		if (sortComboBox.getSelectedIndex() > 0)
+		{
+			count++;
+		}
+		if (lootFilterValue() != null)
+		{
+			count++;
+		}
+		if (ironmanFilter.isSelected())
+		{
+			count++;
+		}
+		if (learnerComboBox.getSelectedIndex() > 0)
+		{
+			count++;
+		}
+		if (!maxPingField.getText().trim().isEmpty())
+		{
+			count++;
+		}
+		for (WorldRegion r : KNOWN_REGIONS)
+		{
+			if (!selectedRegions.contains(r))
+			{
+				count++;
+				break;
+			}
+		}
+		if (hideIneligibleFilter.isSelected())
+		{
+			count++;
+		}
+		return count;
+	}
+
+	/** Refresh the active-filters label and show/hide the reset button accordingly. */
+	private void updateActiveFiltersLabel()
+	{
+		int count = countActiveFilters();
+		if (count == 0)
+		{
+			activeFiltersLabel.setText("");
+			resetButton.setVisible(false);
+		}
+		else
+		{
+			activeFiltersLabel.setText(count + (count == 1 ? " active filter" : " active filters"));
+			resetButton.setVisible(true);
+		}
+	}
+
+	/** Reset every filter to its default state. */
+	private void resetAllFilters()
+	{
+		selectedActivities.addAll(EnumSet.allOf(Activity.class));
+		selectedRoles.clear();
+		for (WorldRegion r : KNOWN_REGIONS)
+		{
+			selectedRegions.add(r);
+		}
+		lootFilter.setSelectedIndex(0);        // "Any loot"
+		ironmanFilter.setSelected(false);
+		learnerComboBox.setSelectedIndex(0);   // "Any"
+		hideIneligibleFilter.setSelected(false);
+		maxPingField.setText("");
+		sortComboBox.setSelectedIndex(0);      // "Newest first"
+		updateRoleToggleText();
+		updateRegionToggleText();
+		rebuildActivityList();
+		filtersChanged();
 	}
 
 	private String requirementText(Activity activity, Party party)
