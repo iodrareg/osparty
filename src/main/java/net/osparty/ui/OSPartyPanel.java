@@ -179,7 +179,7 @@ public class OSPartyPanel extends PluginPanel
 			return;
 		}
 		liveParty.hostParty(party.getPassphrase(), party.getHost(), party.getActivity(), party.getCapacity(), false,
-			party.getHostRole(), party.isLearner());
+			party.getHostRole(), party.isLearner(), party.isTeacher());
 		partyState.setHosting(party);
 	}
 

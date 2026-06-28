@@ -830,7 +830,7 @@ class CreatePanel extends JPanel
 
 			partyService.createParty(request,
 				party -> SwingUtilities.invokeLater(
-					() -> onCreated(party, passphrase, player, capacity, advertiseLayout, hostRole, learner)),
+					() -> onCreated(party, passphrase, player, capacity, advertiseLayout, hostRole, learner, teacher)),
 				error -> SwingUtilities.invokeLater(() -> {
 					creating = false;
 					createButton.setEnabled(true);
@@ -840,7 +840,7 @@ class CreatePanel extends JPanel
 	}
 
 	private void onCreated(Party party, String passphrase, String host, int capacity, boolean advertiseLayout,
-		String hostRole, boolean hostLearner)
+		String hostRole, boolean hostLearner, boolean hostTeacher)
 	{
 		creating = false;
 		createButton.setEnabled(true);
@@ -850,7 +850,7 @@ class CreatePanel extends JPanel
 		partyState.setAdvertiseLayout(advertiseLayout);
 		// Host the live room now that the ad is up; applicants who join are pending
 		// until admitted from the Current tab.
-		liveParty.hostParty(passphrase, host, party.getActivity(), capacity, false, hostRole, hostLearner);
+		liveParty.hostParty(passphrase, host, party.getActivity(), capacity, false, hostRole, hostLearner, hostTeacher);
 		if (party.isPrivateParty() && party.getInviteCode() != null)
 		{
 			setStatus("Private party created - invite code " + party.getInviteCode() + " (also on Current tab).");

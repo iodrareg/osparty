@@ -46,6 +46,9 @@ public class PlayerUpdate extends PartyMemberMessage
 	/** Self-marked as a learner for this raid. */
 	private boolean learner;
 
+	/** Marked as the teacher for this raid (the host of a teaching raid). */
+	private boolean teacher;
+
 	/** Seconds; {@code -1} when unknown. */
 	private double pbSeconds = -1;
 

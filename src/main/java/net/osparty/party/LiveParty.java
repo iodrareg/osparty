@@ -3,6 +3,7 @@ package net.osparty.party;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +87,7 @@ public class LiveParty
 
 	private volatile String localRole;
 	private volatile boolean localLearner;
+	private volatile boolean localTeacher;
 
 	private final Map<Long, PlayerUpdate> playerData = new ConcurrentHashMap<>();
 	/** memberId -> epoch millis last heard from (presence + pruning). */
@@ -212,7 +214,7 @@ public class LiveParty
 	}
 
 	public void hostParty(String passphrase, String hostName, String activityId, int capacity,
-		boolean locked, String role, boolean learner)
+		boolean locked, String role, boolean learner, boolean teacher)
 	{
 		reset();
 		hosting = true;
@@ -223,6 +225,7 @@ public class LiveParty
 		this.currentTeamSize = capacity;
 		this.localRole = role;
 		this.localLearner = learner;
+		this.localTeacher = teacher;
 		stateDirty = true;
 		localDirty = true;
 		partyService.changeParty(passphrase);
@@ -279,6 +282,59 @@ public class LiveParty
 		return localLearner;
 	}
 
+	public boolean isLocalTeacher()
+	{
+		return localTeacher;
+	}
+
+	/** Overhead marker for an in-game player: teacher, learner, or none. */
+	public enum Marker
+	{
+		NONE, LEARNER, TEACHER
+	}
+
+	/**
+	 * Learner/teacher markers for the admitted party members (host + members, not
+	 * pending applicants), keyed by normalised display name so the overlay can match
+	 * them to players in the scene. Members with no marking are omitted.
+	 */
+	public Map<String, Marker> learnerMarkers()
+	{
+		Map<String, Marker> markers = new HashMap<>();
+		for (RosterMember member : roster())
+		{
+			if (member.getStatus() == Status.PENDING || member.getName() == null)
+			{
+				continue;
+			}
+			boolean teacher;
+			boolean learner;
+			if (member.isLocal())
+			{
+				teacher = localTeacher;
+				learner = localLearner;
+			}
+			else
+			{
+				PlayerUpdate data = member.getData();
+				teacher = data != null && data.isTeacher();
+				learner = data != null && data.isLearner();
+			}
+			Marker marker = teacher ? Marker.TEACHER : learner ? Marker.LEARNER : Marker.NONE;
+			if (marker != Marker.NONE)
+			{
+				markers.put(normalizeName(member.getName()), marker);
+			}
+		}
+		return markers;
+	}
+
+	/** RuneLite renders spaces in names as a non-breaking space; fold them for matching. */
+	public static String normalizeName(String name)
+	{
+		return name == null ? "" : name.replace(' ', ' ').trim().toLowerCase();
+	}
+
 	/** Leave the room. Hosts send a closing state first, best effort. */
 	public void leave()
 	{
@@ -310,6 +366,7 @@ public class LiveParty
 		currentTeamSize = 0;
 		localRole = null;
 		localLearner = false;
+		localTeacher = false;
 		lastState = null;
 		stateDirty = false;
 		localDirty = false;
@@ -661,6 +718,7 @@ public class LiveParty
 				// The role we've chosen to fill (a user choice, not read from the client).
 				update.setRole(localRole);
 				update.setLearner(localLearner);
+				update.setTeacher(localTeacher);
 				broadcastLocal(update);
 			}
 		}

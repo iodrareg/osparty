@@ -20,6 +20,7 @@ import net.osparty.ui.ApplicantOverlay;
 import net.osparty.ui.FcRequestOverlay;
 import net.osparty.ui.DefenceInfoBox;
 import net.osparty.ui.NpcDefenceOverlay;
+import net.osparty.ui.PlayerMarkerOverlay;
 import net.osparty.ui.ReadyCheckOverlay;
 import net.osparty.ui.TilePingOverlay;
 import com.google.inject.Provides;
@@ -152,6 +153,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private ReadyCheckOverlay readyCheckOverlay;
 	private TilePingOverlay tilePingOverlay;
 	private NpcDefenceOverlay defenceOverlay;
+	private PlayerMarkerOverlay playerMarkerOverlay;
 	/** Status-bar defence info box, present only while tracking and the toggle is on. */
 	private DefenceInfoBox defenceBox;
 
@@ -251,6 +253,11 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config,
 			ImageUtil.resizeImage(skillIconManager.getSkillImage(Skill.DEFENCE), 16, 16));
 		overlayManager.add(defenceOverlay);
+
+		playerMarkerOverlay = new PlayerMarkerOverlay(client, liveParty, config,
+			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/learner.png"), 24, 24),
+			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/teacher.png"), 24, 24));
+		overlayManager.add(playerMarkerOverlay);
 		// The defence tracker reads RuneLite's Special Attack Counter events, which
 		// only fire while that plugin is running, so make sure it's enabled.
 		enablePluginByName("Special Attack Counter");
@@ -313,6 +320,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		overlayManager.remove(readyCheckOverlay);
 		overlayManager.remove(tilePingOverlay);
 		overlayManager.remove(defenceOverlay);
+		overlayManager.remove(playerMarkerOverlay);
 		if (defenceBox != null)
 		{
 			infoBoxManager.removeInfoBox(defenceBox);
@@ -324,6 +332,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		readyCheckOverlay = null;
 		tilePingOverlay = null;
 		defenceOverlay = null;
+		playerMarkerOverlay = null;
 		panel = null;
 		navButton = null;
 		playerName = null;

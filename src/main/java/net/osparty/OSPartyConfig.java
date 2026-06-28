@@ -17,14 +17,14 @@ public interface OSPartyConfig extends Config
 	@ConfigSection(
 		name = "Defence tracker",
 		description = "Show the live defence of a monster the party is draining with special attacks.",
-		position = 9
+		position = 10
 	)
 	String DEFENCE = "defence";
 
 	@ConfigSection(
 		name = "Meme mode",
 		description = "Optional sound effects for party events. All off by default.",
-		position = 10,
+		position = 11,
 		closedByDefault = true
 	)
 	String MEME_MODE = "memeMode";
@@ -105,6 +105,17 @@ public interface OSPartyConfig extends Config
 	default Color pingColor()
 	{
 		return new Color(0, 255, 255);
+	}
+
+	@ConfigItem(
+		keyName = "learnerTeacherMarkers",
+		name = "Learner/teacher markers",
+		description = "Mark party members tagged as a learner or teacher with an icon and tile highlight in-game. Untagged members get nothing.",
+		position = 9
+	)
+	default boolean learnerTeacherMarkers()
+	{
+		return true;
 	}
 
 	@ConfigItem(
