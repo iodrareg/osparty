@@ -1,6 +1,7 @@
 package net.osparty.ui;
 
 import net.osparty.KillcountService;
+import net.osparty.OSPartyConfig;
 import net.osparty.api.PartyService;
 import net.osparty.model.AccountTypes;
 import net.osparty.model.Activity;
@@ -51,6 +52,7 @@ import javax.swing.Timer;
 import javax.swing.event.AncestorEvent;
 import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.http.api.worlds.WorldRegion;
@@ -75,6 +77,7 @@ class SearchPanel extends JPanel
 	private final Supplier<int[]> mapRegionsSupplier;
 	private final IntFunction<WorldRegion> worldRegionResolver;
 	private final KillcountService killcountService;
+	private final ConfigManager configManager;
 
 	private final JPanel activityListPanel = new JPanel();
 	private final Set<Activity> selectedActivities = EnumSet.allOf(Activity.class);
@@ -110,7 +113,7 @@ class SearchPanel extends JPanel
 	SearchPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		Supplier<String> friendsChatOwnerSupplier, IntSupplier worldSupplier, PartyState partyState,
 		LiveParty liveParty, Supplier<AccountType> accountTypeSupplier, Supplier<int[]> mapRegionsSupplier,
-		IntFunction<WorldRegion> worldRegionResolver, KillcountService killcountService)
+		IntFunction<WorldRegion> worldRegionResolver, KillcountService killcountService, ConfigManager configManager)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -122,6 +125,10 @@ class SearchPanel extends JPanel
 		this.mapRegionsSupplier = mapRegionsSupplier;
 		this.worldRegionResolver = worldRegionResolver;
 		this.killcountService = killcountService;
+		this.configManager = configManager;
+
+		// Restore the filters the player last used, before the UI is built from them.
+		loadFilters();
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -301,6 +308,7 @@ class SearchPanel extends JPanel
 			{
 				liveParty.setLocalLearner(imLearnerCheck.isSelected());
 			}
+			persistFilters();
 		});
 
 		roleContent.setLayout(new BoxLayout(roleContent, BoxLayout.Y_AXIS));
@@ -319,6 +327,7 @@ class SearchPanel extends JPanel
 		rolesExpanded = expanded;
 		roleContent.setVisible(expanded);
 		updateRoleToggleText();
+		persistFilters();
 		revalidate();
 		repaint();
 	}
@@ -360,7 +369,7 @@ class SearchPanel extends JPanel
 					selectedRoles.remove(role);
 				}
 				updateRoleToggleText();
-				reapplyFilters();
+				filtersChanged();
 			});
 			box.add(check);
 		}
@@ -477,7 +486,7 @@ class SearchPanel extends JPanel
 			selectedActivities.clear();
 		}
 		rebuildActivityList();
-		reapplyFilters();
+		filtersChanged();
 	}
 
 	private JButton miniButton(String text)
@@ -512,7 +521,7 @@ class SearchPanel extends JPanel
 				{
 					selectedActivities.remove(activity);
 				}
-				reapplyFilters();
+				filtersChanged();
 			});
 			activityListPanel.add(box);
 		}
@@ -560,12 +569,12 @@ class SearchPanel extends JPanel
 
 	private JPanel buildFilters()
 	{
-		lootFilter.addActionListener(e -> reapplyFilters());
+		lootFilter.addActionListener(e -> filtersChanged());
 
 		ironmanFilter.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		ironmanFilter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		ironmanFilter.setFocusPainted(false);
-		ironmanFilter.addActionListener(e -> reapplyFilters());
+		ironmanFilter.addActionListener(e -> filtersChanged());
 
 		// GridBagLayout centres each control within a full-width cell (weightx=1 +
 		// anchor CENTER) - robust regardless of the surrounding BoxLayout.
@@ -625,6 +634,98 @@ class SearchPanel extends JPanel
 		{
 			showResults(lastResults);
 		}
+	}
+
+	/** A filter changed: save the new selection and re-render the results. */
+	private void filtersChanged()
+	{
+		persistFilters();
+		reapplyFilters();
+	}
+
+	// ---- filter persistence (remembered across sessions) ---------------------
+
+	private static final String KEY_ACTIVITIES = "searchActivities";
+	private static final String KEY_ROLES = "searchRoles";
+	private static final String KEY_LOOT = "searchLoot";
+	private static final String KEY_IRONMAN = "searchIronman";
+	private static final String KEY_LEARNER = "searchLearner";
+	private static final String KEY_ROLES_EXPANDED = "searchRolesExpanded";
+
+	/** Save the current filter selection so it's restored next session. */
+	private void persistFilters()
+	{
+		put(KEY_ACTIVITIES, idsOf(selectedActivities, Activity::getId));
+		put(KEY_ROLES, idsOf(selectedRoles, Role::getId));
+		put(KEY_LOOT, (String) lootFilter.getSelectedItem());
+		put(KEY_IRONMAN, Boolean.toString(ironmanFilter.isSelected()));
+		put(KEY_LEARNER, Boolean.toString(imLearnerCheck.isSelected()));
+		put(KEY_ROLES_EXPANDED, Boolean.toString(rolesExpanded));
+	}
+
+	/** Restore the saved filter selection into the in-memory state and the controls. */
+	private void loadFilters()
+	{
+		String activities = get(KEY_ACTIVITIES);
+		if (activities != null)
+		{
+			selectedActivities.clear();
+			for (String id : activities.split(","))
+			{
+				Activity activity = Activity.fromId(id);
+				if (activity != null)
+				{
+					selectedActivities.add(activity);
+				}
+			}
+		}
+
+		String roles = get(KEY_ROLES);
+		if (roles != null)
+		{
+			selectedRoles.clear();
+			for (String id : roles.split(","))
+			{
+				Role role = Role.fromId(id);
+				if (role != null)
+				{
+					selectedRoles.add(role);
+				}
+			}
+		}
+
+		String loot = get(KEY_LOOT);
+		if (loot != null)
+		{
+			lootFilter.setSelectedItem(loot);
+		}
+		ironmanFilter.setSelected(Boolean.parseBoolean(get(KEY_IRONMAN)));
+		imLearnerCheck.setSelected(Boolean.parseBoolean(get(KEY_LEARNER)));
+		rolesExpanded = Boolean.parseBoolean(get(KEY_ROLES_EXPANDED));
+	}
+
+	private static <T> String idsOf(Set<T> values, java.util.function.Function<T, String> id)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (T value : values)
+		{
+			if (sb.length() > 0)
+			{
+				sb.append(',');
+			}
+			sb.append(id.apply(value));
+		}
+		return sb.toString();
+	}
+
+	private void put(String key, String value)
+	{
+		configManager.setConfiguration(OSPartyConfig.GROUP, key, value == null ? "" : value);
+	}
+
+	private String get(String key)
+	{
+		return configManager.getConfiguration(OSPartyConfig.GROUP, key);
 	}
 
 	private void joinByCode()

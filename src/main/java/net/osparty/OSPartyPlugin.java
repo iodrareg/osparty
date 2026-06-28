@@ -218,6 +218,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	private final java.util.Deque<PendingPrompt> promptQueue = new java.util.ArrayDeque<>();
 	/** True while one of our chatbox prompts is open, so we show them one at a time. */
 	private boolean promptOpen;
+	/** Member id the open chatbox prompt is for, so we can close it if they're resolved elsewhere; 0 = none. */
+	private long openPromptMemberId;
 
 	private static final class PendingPrompt
 	{
@@ -861,9 +863,11 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		String title = applicant.getName() + " - " + applicantSummary(applicant, activity);
 
 		promptOpen = true;
+		openPromptMemberId = applicant.getMemberId();
 		chatboxPanelManager.openTextMenuInput(title)
 			.option("Accept", () -> {
 				promptOpen = false;
+				openPromptMemberId = 0;
 				if (liveParty.admit(applicant.getMemberId(), applicant.getName()))
 				{
 					announceResolved(applicant, activity, true);
@@ -875,19 +879,44 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 			})
 			.option("Decline", () -> {
 				promptOpen = false;
+				openPromptMemberId = 0;
 				liveParty.reject(applicant.getMemberId());
 				announceResolved(applicant, activity, false);
 			})
-			.option("Decide later", () -> promptOpen = false)
-			.onClose(() -> promptOpen = false)
+			.option("Decide later", () -> {
+				promptOpen = false;
+				openPromptMemberId = 0;
+			})
+			.onClose(() -> {
+				promptOpen = false;
+				openPromptMemberId = 0;
+			})
 			.build();
 	}
 
 	@Override
 	public void announceResolved(Applicant applicant, Activity activity, boolean accepted)
 	{
+		// If this applicant was resolved elsewhere (e.g. the side panel) while their
+		// in-game prompt is still open, close it so it can't be actioned twice.
+		dismissPromptFor(applicant.getMemberId());
 		gameMessage((accepted ? "Accepted " : "Declined ") + applicant.getName()
 			+ " for your " + activity.getDisplayName() + " party.");
+	}
+
+	/** Close the open chatbox applicant prompt if it's the one for {@code memberId}. */
+	private void dismissPromptFor(long memberId)
+	{
+		if (memberId == 0)
+		{
+			return;
+		}
+		clientThread.invoke(() -> {
+			if (openPromptMemberId == memberId)
+			{
+				chatboxPanelManager.close();
+			}
+		});
 	}
 
 	private void playReadySound()
