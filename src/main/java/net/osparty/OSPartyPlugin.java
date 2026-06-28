@@ -255,8 +255,8 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		overlayManager.add(defenceOverlay);
 
 		playerMarkerOverlay = new PlayerMarkerOverlay(client, liveParty, config,
-			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/learner.png"), 24, 24),
-			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/teacher.png"), 24, 24));
+			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/learner.png"), 12, 12),
+			ImageUtil.resizeImage(ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/teacher.png"), 12, 12));
 		overlayManager.add(playerMarkerOverlay);
 		// The defence tracker reads RuneLite's Special Attack Counter events, which
 		// only fire while that plugin is running, so make sure it's enabled.

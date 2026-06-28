@@ -20,13 +20,14 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 
 /**
  * Marks party members tagged as a learner or teacher in the game scene: an icon
- * above their head and a coloured highlight on their tile. Untagged members get
- * nothing. Driven by {@link LiveParty#learnerMarkers()} and gated by config.
+ * beside their name and a coloured highlight on their tile. Untagged members get
+ * nothing. The icon and tile marker are independent toggles, and the tile colour
+ * is configurable per role. Driven by {@link LiveParty#learnerMarkers()}.
  */
 public class PlayerMarkerOverlay extends Overlay
 {
-	private static final Color TEACHER_COLOR = new Color(255, 175, 45);
-	private static final Color LEARNER_COLOR = new Color(80, 200, 255);
+	/** Gap in px between the icon and the name. */
+	private static final int ICON_GAP = 2;
 
 	private final Client client;
 	private final LiveParty liveParty;
@@ -49,7 +50,9 @@ public class PlayerMarkerOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		if (!config.learnerTeacherMarkers())
+		boolean icons = config.learnerTeacherIcons();
+		boolean tiles = config.learnerTeacherTiles();
+		if (!icons && !tiles)
 		{
 			return null;
 		}
@@ -70,37 +73,56 @@ public class PlayerMarkerOverlay extends Overlay
 			{
 				continue;
 			}
-			Color color = marker == Marker.TEACHER ? TEACHER_COLOR : LEARNER_COLOR;
-			BufferedImage icon = marker == Marker.TEACHER ? teacherIcon : learnerIcon;
-			drawMarker(graphics, player, color, icon);
+			if (tiles)
+			{
+				drawTile(graphics, player, colorFor(marker));
+			}
+			if (icons)
+			{
+				drawNameIcon(graphics, player, marker == Marker.TEACHER ? teacherIcon : learnerIcon);
+			}
 		}
 		return null;
 	}
 
-	private void drawMarker(Graphics2D graphics, Player player, Color color, BufferedImage icon)
+	private Color colorFor(Marker marker)
+	{
+		return marker == Marker.TEACHER ? config.teacherColor() : config.learnerColor();
+	}
+
+	private void drawTile(Graphics2D graphics, Player player, Color color)
 	{
 		LocalPoint lp = player.getLocalLocation();
 		if (lp == null)
 		{
 			return;
 		}
-
 		Polygon tile = Perspective.getCanvasTilePoly(client, lp);
-		if (tile != null)
+		if (tile == null)
 		{
-			graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 40));
-			graphics.fill(tile);
-			graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 150));
-			graphics.draw(tile);
+			return;
 		}
+		graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), Math.min(60, color.getAlpha())));
+		graphics.fill(tile);
+		graphics.setColor(color);
+		graphics.draw(tile);
+	}
 
-		if (icon != null)
+	/** Draw the icon just left of the player's overhead name, like a clan icon. */
+	private void drawNameIcon(Graphics2D graphics, Player player, BufferedImage icon)
+	{
+		if (icon == null)
 		{
-			Point loc = player.getCanvasImageLocation(icon, player.getLogicalHeight() + 20);
-			if (loc != null)
-			{
-				graphics.drawImage(icon, loc.getX(), loc.getY(), null);
-			}
+			return;
 		}
+		String name = player.getName();
+		Point textLoc = player.getCanvasTextLocation(graphics, name, player.getLogicalHeight() + 40);
+		if (textLoc == null)
+		{
+			return;
+		}
+		int x = textLoc.getX() - ICON_GAP - icon.getWidth();
+		int y = textLoc.getY() - icon.getHeight();
+		graphics.drawImage(icon, x, y, null);
 	}
 }
