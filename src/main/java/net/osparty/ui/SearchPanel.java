@@ -1384,7 +1384,8 @@ class SearchPanel extends PartyCardPanel
 			+ "|s" + sortComboBox.getSelectedIndex()
 			+ "|l" + learnerComboBox.getSelectedIndex()
 			+ "|h" + hideIneligibleFilter.isSelected()
-			+ "|f" + friendSignatureOf(visible);
+			+ "|f" + friendSignatureOf(visible)
+			+ "|v" + favSignatureOf(visible);
 		if (signature.equals(renderedSignature))
 		{
 			return;
@@ -1598,6 +1599,27 @@ class SearchPanel extends PartyCardPanel
 			if (friends.contains(key))
 			{
 				sb.append(p.getId()).append(',');
+			}
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Signature of which visible parties are currently favourited, so toggling a star
+	 * (here or on the Favorites tab) invalidates the cached render and rebuilds the icons.
+	 */
+	private String favSignatureOf(List<Party> parties)
+	{
+		if (favoritesService == null)
+		{
+			return "";
+		}
+		StringBuilder sb = new StringBuilder();
+		for (Party p : parties)
+		{
+			if (favoritesService.hasAnyFavorite(p))
+			{
+				sb.append(p.getId()).append(favoritesService.isFavorite(p.getHost()) ? "H" : "").append(',');
 			}
 		}
 		return sb.toString();

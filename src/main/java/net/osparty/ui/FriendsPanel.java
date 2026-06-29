@@ -18,9 +18,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
+import java.awt.image.BufferedImage;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -56,8 +58,29 @@ class FriendsPanel extends PartyCardPanel
 	private final JPanel friendsContent;
 	private final JLabel favoritesCount;
 	private final JLabel friendsCount;
+	private final JLabel favoritesCaret;
+	private final JLabel friendsCaret;
 	private boolean favExpanded = true;
 	private boolean friendsExpanded = true;
+
+	/** RuneLite's config-section caret (grey): points right when collapsed, down when expanded. */
+	private static final ImageIcon CARET_COLLAPSED = caret(0);
+	private static final ImageIcon CARET_EXPANDED = caret(Math.PI / 2);
+
+	private static ImageIcon caret(double rotation)
+	{
+		BufferedImage arrow = ImageUtil.loadImageResource(FriendsPanel.class, "/util/arrow_right.png");
+		if (arrow == null)
+		{
+			return null;
+		}
+		BufferedImage grey = ImageUtil.luminanceOffset(arrow, -121);
+		if (rotation != 0)
+		{
+			grey = ImageUtil.rotateImage(grey, rotation);
+		}
+		return new ImageIcon(grey);
+	}
 
 	// ---- constructor -------------------------------------------------------
 
@@ -89,6 +112,7 @@ class FriendsPanel extends PartyCardPanel
 		JPanel friendsHeader = buildSectionHeader("Friends", new Color(0x56A0D3),
 			() -> { friendsExpanded = !friendsExpanded; render(); });
 		friendsCount = (JLabel) friendsHeader.getClientProperty("count");
+		friendsCaret = (JLabel) friendsHeader.getClientProperty("caret");
 		JLabel friendsTitleLabel = (JLabel) friendsHeader.getClientProperty("title");
 		friendsContent = new JPanel();
 		friendsContent.setLayout(new BoxLayout(friendsContent, BoxLayout.Y_AXIS));
@@ -99,6 +123,7 @@ class FriendsPanel extends PartyCardPanel
 		JPanel favHeader = buildSectionHeader("Favorites", new Color(0xFF8C00),
 			() -> { favExpanded = !favExpanded; render(); });
 		favoritesCount = (JLabel) favHeader.getClientProperty("count");
+		favoritesCaret = (JLabel) favHeader.getClientProperty("caret");
 		JLabel favTitleLabel = (JLabel) favHeader.getClientProperty("title");
 		favoritesContent = new JPanel();
 		favoritesContent.setLayout(new BoxLayout(favoritesContent, BoxLayout.Y_AXIS));
@@ -281,6 +306,9 @@ class FriendsPanel extends PartyCardPanel
 		updateCountBadge(favoritesCount, faves.size());
 		updateCountBadge(friendsCount, friendParties.size());
 
+		updateCaret(favoritesCaret, favExpanded);
+		updateCaret(friendsCaret, friendsExpanded);
+
 		int total = faves.size() + friendParties.size();
 		setStatus(total == 0 ? "No matching parties right now." :
 			total + " open " + (total == 1 ? "party" : "parties") + " found.");
@@ -342,6 +370,11 @@ class FriendsPanel extends PartyCardPanel
 		countLabel.setFont(FontManager.getRunescapeSmallFont());
 		countLabel.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
 
+		// Expand/collapse caret (down = expanded). render() flips it per state.
+		JLabel caretLabel = new JLabel(CARET_EXPANDED);
+		caretLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 4));
+
+		header.add(caretLabel, BorderLayout.WEST);
 		header.add(titleLabel, BorderLayout.CENTER);
 		header.add(countLabel, BorderLayout.EAST);
 
@@ -356,6 +389,7 @@ class FriendsPanel extends PartyCardPanel
 		header.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
 		header.putClientProperty("count", countLabel);
 		header.putClientProperty("title", titleLabel);
+		header.putClientProperty("caret", caretLabel);
 		return header;
 	}
 
@@ -366,5 +400,14 @@ class FriendsPanel extends PartyCardPanel
 			return;
 		}
 		badge.setText(count == 0 ? "" : "(" + count + ")");
+	}
+
+	private static void updateCaret(JLabel caret, boolean expanded)
+	{
+		if (caret == null)
+		{
+			return;
+		}
+		caret.setIcon(expanded ? CARET_EXPANDED : CARET_COLLAPSED);
 	}
 }
