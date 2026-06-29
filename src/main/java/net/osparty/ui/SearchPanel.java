@@ -1473,6 +1473,12 @@ class SearchPanel extends PartyCardPanel
 				.append('L').append(party.getLayout() == null ? "" : party.getLayout())
 				.append('R').append(neededRolesOf(party) == null ? "" : neededRolesOf(party))
 				.append('d').append(party.isHardMode() ? "h" : "").append(party.getInvocation())
+				// Host-editable card content, so an edit invalidates the cached render.
+				.append('K').append(party.getMinKillCount()).append('/').append(party.getMinHardModeKillCount())
+				.append('o').append(party.getLootRule() == null ? "" : party.getLootRule())
+				.append('i').append(party.isIronmanOnly() ? '1' : '0')
+				.append('l').append(party.isLearnerRaid() ? '1' : '0')
+				.append('D').append(party.getDescription() == null ? "" : party.getDescription())
 				.append('@').append(ageMinutes(now, party.getCreatedAt())).append(';');
 		}
 		return sb.toString();

@@ -1,6 +1,7 @@
 package net.osparty.api;
 
 import net.osparty.model.Party;
+import net.osparty.model.PartyEditRequest;
 import net.osparty.model.PartyRequest;
 import java.io.IOException;
 import java.util.Arrays;
@@ -101,6 +102,17 @@ public class PartyApiClient implements PartyService
 		// The open socket is the keep-alive; just push the changed fields (deduped inside
 		// PartySocket). There is no acknowledgement — list changes come back as deltas.
 		partySocket.update(partyId, hostKey, patchOf(size, world, layout, roles));
+	}
+
+	@Override
+	public void editParty(String partyId, String hostKey, PartyEditRequest edit, Consumer<Party> onSuccess,
+		Consumer<Throwable> onError)
+	{
+		// The edit request mirrors the server's PartyUpdate field-for-field, so it serialises
+		// straight into the update frame's patch. There's no ack (like disband), so report
+		// success optimistically; the refreshed ad comes back as an 'updated' broadcast.
+		partySocket.edit(partyId, hostKey, edit);
+		onSuccess.accept(null);
 	}
 
 	@Override

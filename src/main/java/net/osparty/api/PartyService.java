@@ -1,6 +1,7 @@
 package net.osparty.api;
 
 import net.osparty.model.Party;
+import net.osparty.model.PartyEditRequest;
 import net.osparty.model.PartyRequest;
 import java.util.List;
 import java.util.function.Consumer;
@@ -42,6 +43,15 @@ public interface PartyService
 	 */
 	void heartbeat(String partyId, int size, int world, String layout, String roles, String hostKey,
 		Consumer<Party> onSuccess, Consumer<Throwable> onError);
+
+	/**
+	 * Host action: edit the advertised settings of a party (description, capacity, loot rule,
+	 * requirements, roles, etc.). Unlike {@link #heartbeat}, this carries every editable field
+	 * so values can be cleared as well as set. {@code hostKey} authorises the mutation; the
+	 * updated ad arrives back via the live list (and a roster broadcast for joined members).
+	 */
+	void editParty(String partyId, String hostKey, PartyEditRequest edit, Consumer<Party> onSuccess,
+		Consumer<Throwable> onError);
 
 	/** Host action: close the ad. {@code hostKey} authorises it. */
 	void disbandParty(String partyId, String host, String hostKey, Consumer<Party> onSuccess, Consumer<Throwable> onError);

@@ -282,9 +282,37 @@ public class LiveParty
 		return localLearner;
 	}
 
+	/** Mark/unmark ourselves as a teacher and re-broadcast so the host sees it. No-op when unchanged. */
+	public void setLocalTeacher(boolean teacher)
+	{
+		if (teacher == localTeacher)
+		{
+			return;
+		}
+		localTeacher = teacher;
+		localDirty = true;
+		fire();
+	}
+
 	public boolean isLocalTeacher()
 	{
 		return localTeacher;
+	}
+
+	/**
+	 * Host edit: change the party's capacity. Updates the authoritative room size so admit
+	 * limits and the broadcast state reflect the new value. No-op when unchanged or not hosting.
+	 */
+	public void setCapacity(int capacity)
+	{
+		if (!hosting || capacity == this.capacity)
+		{
+			return;
+		}
+		this.capacity = capacity;
+		this.currentTeamSize = capacity;
+		stateDirty = true;
+		fire();
 	}
 
 	/** Overhead marker for an in-game player: teacher, learner, or none. */

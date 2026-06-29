@@ -214,6 +214,22 @@ public class PartySocket extends WebSocketListener
 		}
 	}
 
+	/**
+	 * Push a host-initiated edit to the hosted ad. Unlike {@link #update}, this is a one-off
+	 * user action so it always sends (no dedup), and it resets {@code lastSentPatch} so the
+	 * next keep-alive heartbeat re-sends its live fields against the new baseline.
+	 */
+	public void edit(String id, String key, Object patch)
+	{
+		hostingId = id;
+		hostingKey = key;
+		lastSentPatch = null;
+		if (connected)
+		{
+			send(gson.toJson(new UpdateFrame(id, key, patch)));
+		}
+	}
+
 	/** Disband the hosted ad. */
 	public void unhost(String id, String key)
 	{
