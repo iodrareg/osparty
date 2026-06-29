@@ -218,24 +218,13 @@ class SearchPanel extends PartyCardPanel
 		updateActiveFiltersLabel();
 
 		// While the tab is visible: re-check whether we've moved near a different
-		// activity, and keep the list current. When the live socket is connected it
-		// pushes changes, so this only re-renders to refresh the "searching Xm" age
-		// labels (no network); when it isn't, this is the REST polling fallback.
+		// activity, and re-render to refresh the "searching Xm" age labels. The live
+		// socket pushes list changes, so this does no network I/O.
 		autoRefreshTimer = new Timer(10_000, e -> {
 			if (isShowing())
 			{
 				applyRecommendation();
-				if (isSocketLive())
-				{
-					if (lastResults != null)
-					{
-						showResults(lastResults);
-					}
-				}
-				else
-				{
-					search();
-				}
+				renderCurrent();
 			}
 		});
 		autoRefreshTimer.start();
@@ -251,15 +240,7 @@ class SearchPanel extends PartyCardPanel
 			{
 				startSubscription();
 				applyRecommendation();
-				if (isSocketLive() && lastResults != null)
-				{
-					// Socket already has the current list — render it without a REST hit.
-					showResults(lastResults);
-				}
-				else
-				{
-					search();
-				}
+				renderCurrent();
 				updateJoinButton();
 			}
 
@@ -323,7 +304,7 @@ class SearchPanel extends PartyCardPanel
 
 		searchButton.setFocusPainted(false);
 		searchButton.setToolTipText("Refresh the list of open parties");
-		searchButton.addActionListener(e -> search());
+		searchButton.addActionListener(e -> renderCurrent());
 
 		bottomRow.add(badgePanel, BorderLayout.WEST);
 		bottomRow.add(searchButton, BorderLayout.EAST);
@@ -1202,26 +1183,18 @@ class SearchPanel extends PartyCardPanel
 		return null; // "Any loot"
 	}
 
-	private void search()
+	/** Re-render the latest list pushed by the socket; no network (the feed is live). */
+	private void renderCurrent()
 	{
-		String player = playerNameSupplier.get();
-		// When exactly one activity is selected, pass it so the server pre-filters
-		// the result set; otherwise fetch everything and filter client-side.
-		Activity single = selectedActivities.size() == 1 ? selectedActivities.iterator().next() : null;
-		partyService.searchParties(single, player,
-			parties -> SwingUtilities.invokeLater(() -> showResults(parties)),
-			error -> SwingUtilities.invokeLater(() -> setStatus("Refresh failed: " + error.getMessage())));
-	}
-
-	private boolean isSocketLive()
-	{
-		return subscription != null && subscription.isConnected();
+		if (lastResults != null)
+		{
+			showResults(lastResults);
+		}
 	}
 
 	/**
-	 * Subscribe to the live party list. The server pushes the full list on subscribe
-	 * and after every change; we render it on the EDT, same path as a REST refresh. If
-	 * the socket isn't connected (older server), {@link #autoRefreshTimer} polls REST.
+	 * Subscribe to the live party list. The server pushes the full list on (re)connect and
+	 * after every change; we render it on the EDT. This is the only source of list data.
 	 */
 	private void startSubscription()
 	{
@@ -1231,7 +1204,7 @@ class SearchPanel extends PartyCardPanel
 		}
 		subscription = partyService.subscribeParties(
 			parties -> SwingUtilities.invokeLater(() -> acceptPushedParties(parties)),
-			error -> { /* the REST fallback in autoRefreshTimer covers a down socket */ });
+			error -> { /* transient socket drop; a reconnect re-subscribes and re-snapshots */ });
 	}
 
 	/** Stop receiving the live list (the plugin's socket stays open for hosting). */

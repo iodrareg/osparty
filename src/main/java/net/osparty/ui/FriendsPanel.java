@@ -4,6 +4,7 @@ import net.osparty.FavoritesService;
 import net.osparty.KillcountService;
 import net.osparty.WorldPinger;
 import net.osparty.api.PartyService;
+import net.osparty.api.PartySubscription;
 import net.osparty.model.Activity;
 import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
@@ -25,7 +26,8 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
-import javax.swing.Timer;
+import javax.swing.event.AncestorEvent;
+import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
@@ -43,10 +45,8 @@ import net.runelite.http.api.worlds.WorldRegion;
  */
 class FriendsPanel extends PartyCardPanel
 {
-	private static final int REFRESH_MS = 10_000;
-
 	private List<Party> lastAll = new ArrayList<>();
-	private Timer refreshTimer;
+	private PartySubscription subscription;
 
 	// ---- UI ----------------------------------------------------------------
 	private final JLabel statusLabel;
@@ -122,7 +122,7 @@ class FriendsPanel extends PartyCardPanel
 		JButton refreshBtn = new JButton("↺");
 		refreshBtn.setFocusPainted(false);
 		refreshBtn.setToolTipText("Refresh now");
-		refreshBtn.addActionListener(e -> fetchAndRender());
+		refreshBtn.addActionListener(e -> render());
 
 		JPanel bottom = new JPanel(new BorderLayout(4, 0));
 		bottom.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -133,10 +133,27 @@ class FriendsPanel extends PartyCardPanel
 		add(scroll, BorderLayout.CENTER);
 		add(bottom, BorderLayout.SOUTH);
 
-		// ---- auto-refresh every 10 s ---------------------------------------
-		refreshTimer = new Timer(REFRESH_MS, e -> fetchAndRender());
-		refreshTimer.start();
-		fetchAndRender();
+		// Subscribe to the live party list only while this tab is visible; the socket
+		// pushes the full list and every change, so there is no polling.
+		addAncestorListener(new AncestorListener()
+		{
+			@Override
+			public void ancestorAdded(AncestorEvent event)
+			{
+				startSubscription();
+			}
+
+			@Override
+			public void ancestorRemoved(AncestorEvent event)
+			{
+				stopSubscription();
+			}
+
+			@Override
+			public void ancestorMoved(AncestorEvent event)
+			{
+			}
+		});
 	}
 
 	// ---- abstract impl ----------------------------------------------------
@@ -162,14 +179,30 @@ class FriendsPanel extends PartyCardPanel
 
 	// ---- data --------------------------------------------------------------
 
-	private void fetchAndRender()
+	private void startSubscription()
 	{
-		partyService.searchParties(null, playerNameSupplier.get(),
-			parties -> {
-				lastAll = parties != null ? parties : new ArrayList<>();
-				SwingUtilities.invokeLater(this::render);
-			},
-			error -> SwingUtilities.invokeLater(() -> setStatus("Could not load parties.")));
+		if (subscription != null)
+		{
+			return;
+		}
+		subscription = partyService.subscribeParties(
+			parties -> SwingUtilities.invokeLater(() -> acceptParties(parties)),
+			error -> { /* transient socket drop; a reconnect re-subscribes and re-snapshots */ });
+	}
+
+	private void stopSubscription()
+	{
+		if (subscription != null)
+		{
+			subscription.close();
+			subscription = null;
+		}
+	}
+
+	private void acceptParties(List<Party> parties)
+	{
+		lastAll = parties != null ? parties : new ArrayList<>();
+		render();
 	}
 
 	private void render()
