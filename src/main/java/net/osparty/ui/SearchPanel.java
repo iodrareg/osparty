@@ -82,7 +82,7 @@ class SearchPanel extends JPanel
 	private final ConfigManager configManager;
 
 	private final JPanel activityListPanel = new JPanel();
-	private final Set<Activity> selectedActivities = EnumSet.allOf(Activity.class);
+	private final Set<Activity> selectedActivities = EnumSet.noneOf(Activity.class);
 	private final Set<Role> selectedRoles = EnumSet.noneOf(Role.class);
 	private boolean rolesExpanded;
 	private final JButton roleToggle = new JButton();
