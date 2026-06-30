@@ -13,7 +13,6 @@ import java.awt.image.BufferedImage;
 import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.Point;
-import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -62,7 +61,7 @@ public class NpcDefenceOverlay extends Overlay
 			return null;
 		}
 
-		graphics.setFont(FontManager.getRunescapeSmallFont());
+		graphics.setFont(config.defenceFontSize().font());
 		FontMetrics fm = graphics.getFontMetrics();
 
 		long shown = config.defenceShowFullLevel()
@@ -93,6 +92,12 @@ public class NpcDefenceOverlay extends Overlay
 		}
 		int x = anchor.getX() - totalW / 2 + position.getXNudge();
 		int baseline = anchor.getY();
+
+		if (config.defenceTextPlate())
+		{
+			graphics.setColor(new Color(0, 0, 0, 150));
+			graphics.fillRect(x - 2, baseline - fm.getAscent() - 1, totalW + 4, fm.getHeight() + 2);
+		}
 
 		if (icon != null)
 		{

@@ -263,7 +263,7 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		// run over it, and an open connection is the host's keep-alive.
 		partySocket.start();
 
-		applicantOverlay = new ApplicantOverlay();
+		applicantOverlay = new ApplicantOverlay(config);
 		overlayManager.add(applicantOverlay);
 
 		fcRequestOverlay = new FcRequestOverlay();
@@ -597,12 +597,33 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 		{
 			return;
 		}
-		String fc = event.getFriendsChat();
-		if (fcRequestOverlay != null && fc != null)
+		String host = event.getHostName() != null ? event.getHostName() : "The host";
+		String kind = event.getKind() == null ? "FC" : event.getKind();
+		String title;
+		String detail;
+		switch (kind)
 		{
-			fcRequestOverlay.show(event.getHostName(), fc, 3000);
-			gameMessage((event.getHostName() != null ? event.getHostName() : "The host")
-				+ " asks you to join the friends chat \"" + fc + "\".");
+			case "NOTICE_BOARD":
+				title = "Party reminder";
+				detail = "Apply on the Theatre of Blood notice board.";
+				break;
+			case "OBELISK":
+				title = "Party reminder";
+				detail = "Apply on the Grouping Obelisk.";
+				break;
+			default:
+				String fc = event.getFriendsChat();
+				if (fc == null)
+				{
+					return;
+				}
+				title = "Friends chat request";
+				detail = "Join the friends chat: " + fc;
+		}
+		if (fcRequestOverlay != null)
+		{
+			fcRequestOverlay.show(host, title, detail, 3000);
+			gameMessage(host + " — " + detail);
 			if (config.friendsChatRequestSound())
 			{
 				playResourceSound("/net/osparty/sounds/friendschatsound.wav");
@@ -1023,6 +1044,10 @@ public class OSPartyPlugin extends Plugin implements HostApplicationHandler
 	 */
 	private void gameMessage(String message)
 	{
+		if (!config.chatboxNotifications())
+		{
+			return;
+		}
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
 			return;

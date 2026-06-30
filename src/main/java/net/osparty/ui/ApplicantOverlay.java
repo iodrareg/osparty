@@ -1,5 +1,6 @@
 package net.osparty.ui;
 
+import net.osparty.OSPartyConfig;
 import net.osparty.model.Activity;
 import net.osparty.model.Applicant;
 import net.osparty.model.Role;
@@ -21,9 +22,11 @@ public class ApplicantOverlay extends OverlayPanel
 {
 	private volatile List<Applicant> applicants = new ArrayList<>();
 	private volatile Activity activity;
+	private final OSPartyConfig config;
 
-	public ApplicantOverlay()
+	public ApplicantOverlay(OSPartyConfig config)
 	{
+		this.config = config;
 		setPosition(OverlayPosition.TOP_LEFT);
 	}
 
@@ -57,8 +60,16 @@ public class ApplicantOverlay extends OverlayPanel
 			.color(Color.ORANGE)
 			.build());
 
+		// Cap the list so the overlay can't grow off the bottom of the screen (point 43).
+		int max = Math.max(1, config.applicantOverlayMax());
+		int shown = 0;
 		for (Applicant a : list)
 		{
+			if (shown >= max)
+			{
+				break;
+			}
+			shown++;
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(a.getName())
 				.right("cb " + a.getCombatLevel())
@@ -96,6 +107,14 @@ public class ApplicantOverlay extends OverlayPanel
 					.rightColor(Color.GREEN)
 					.build());
 			}
+		}
+
+		if (list.size() > max)
+		{
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("+" + (list.size() - max) + " more")
+				.leftColor(Color.LIGHT_GRAY)
+				.build());
 		}
 
 		return super.render(graphics);

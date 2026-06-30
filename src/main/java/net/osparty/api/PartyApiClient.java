@@ -79,6 +79,12 @@ public class PartyApiClient implements PartyService
 			}
 
 			@Override
+			public void reconnect()
+			{
+				partySocket.reconnectNow();
+			}
+
+			@Override
 			public void close()
 			{
 				partySocket.clearSearchListener(onParties);

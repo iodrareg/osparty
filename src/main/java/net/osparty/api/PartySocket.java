@@ -139,6 +139,17 @@ public class PartySocket extends WebSocketListener
 		return connected && !closed;
 	}
 
+	/** Force an immediate reconnect attempt (e.g. from a UI "Reconnect" button). */
+	public synchronized void reconnectNow()
+	{
+		if (closed || connected)
+		{
+			return;
+		}
+		attempt = 0;
+		connect();
+	}
+
 	private synchronized void connect()
 	{
 		if (closed)

@@ -1,7 +1,9 @@
 package net.osparty.ui;
 
+import net.osparty.FavoritesService;
 import net.osparty.HostApplicationHandler;
 import net.osparty.KillcountService;
+import net.osparty.OSPartyConfig;
 import net.osparty.PersonalBests;
 import net.osparty.api.PartyService;
 import net.osparty.model.AccountTypes;
@@ -29,6 +31,7 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LayoutManager;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
@@ -48,14 +51,18 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import net.runelite.api.Skill;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
@@ -63,11 +70,11 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.util.ImageUtil;
 
 /**
- * "Current" tab: the live party the player is in. The roster, statuses and each
+ * "Party" tab: the live party the player is in. The roster, statuses and each
  * member's gear/inventory/stats come from the peer-to-peer party
  * ({@link LiveParty}); the API only advertised the room.
  */
-class CurrentPanel extends JPanel
+class PartyPanel extends JPanel
 {
 	private static final int TAB_SKILLS = 0;
 	private static final int TAB_GEAR = 1;
@@ -88,6 +95,9 @@ class CurrentPanel extends JPanel
 	private final IntConsumer worldHopper;
 	private final Supplier<String> friendsChatOwnerSupplier;
 	private final Supplier<String> coxLayoutSupplier;
+	private final OSPartyConfig config;
+	private final ConfigManager configManager;
+	private final FavoritesService favoritesService;
 
 	/** Skills in the in-game skills-tab layout (row-major, 3 columns), total last. */
 	private static final Skill[] SKILL_LAYOUT = {
@@ -107,7 +117,7 @@ class CurrentPanel extends JPanel
 	{
 		try
 		{
-			BufferedImage img = ImageUtil.loadImageResource(CurrentPanel.class, "/net/osparty/icons/total.png");
+			BufferedImage img = ImageUtil.loadImageResource(PartyPanel.class, "/net/osparty/icons/total.png");
 			return new ImageIcon(img.getScaledInstance(18, 16, java.awt.Image.SCALE_SMOOTH));
 		}
 		catch (Exception e)
@@ -128,11 +138,12 @@ class CurrentPanel extends JPanel
 	private final Map<Long, Long> fcRequestCooldown = new HashMap<>();
 	private static final long FC_REQUEST_COOLDOWN_MS = 10_000;
 
-	CurrentPanel(PartyService partyService, Supplier<String> playerNameSupplier,
+	PartyPanel(PartyService partyService, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, PartyState partyState, ItemManager itemManager,
 		LiveParty liveParty, RuneWatchService runeWatch, KillcountService killcounts,
 		SkillIconManager skillIcons, IntSupplier currentWorld, IntConsumer worldHopper,
-		Supplier<String> friendsChatOwnerSupplier, Supplier<String> coxLayoutSupplier)
+		Supplier<String> friendsChatOwnerSupplier, Supplier<String> coxLayoutSupplier,
+		OSPartyConfig config, ConfigManager configManager, FavoritesService favoritesService)
 	{
 		this.partyService = partyService;
 		this.playerNameSupplier = playerNameSupplier;
@@ -147,6 +158,9 @@ class CurrentPanel extends JPanel
 		this.worldHopper = worldHopper;
 		this.friendsChatOwnerSupplier = friendsChatOwnerSupplier;
 		this.coxLayoutSupplier = coxLayoutSupplier;
+		this.config = config;
+		this.configManager = configManager;
+		this.favoritesService = favoritesService;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
@@ -155,7 +169,9 @@ class CurrentPanel extends JPanel
 		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 		content.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		JPanel wrap = new JPanel(new BorderLayout());
+		// Track the viewport width so rows never exceed it (otherwise long rows clip on
+		// the right and the chevron disappears with HORIZONTAL_SCROLLBAR_NEVER).
+		JPanel wrap = new ScrollableColumn(new BorderLayout());
 		wrap.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		wrap.add(content, BorderLayout.NORTH);
 
@@ -298,6 +314,9 @@ class CurrentPanel extends JPanel
 			lastReportedSize = -1;
 			lastReportedLayout = null;
 			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
+			// Clear any leftover action text so a new party doesn't open showing the last
+			// party's "Disbanding…/Left…" message (the stale "one step behind" status).
+			setStatus("");
 			content.revalidate();
 			content.repaint();
 			return;
@@ -312,9 +331,14 @@ class CurrentPanel extends JPanel
 		JLabel header = new JLabel(host
 			? "Your " + activityName + " party"
 			: party.getHost() + "'s " + activityName + " party");
-		header.setForeground(ColorScheme.BRAND_ORANGE);
+		header.setForeground(Color.WHITE);
+		header.setFont(FontManager.getRunescapeBoldFont());
 		header.setAlignmentX(Component.LEFT_ALIGNMENT);
+		header.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(0, 0, 4, 0)));
 		content.add(header);
+		content.add(Box.createVerticalStrut(4));
 
 		List<RosterMember> roster = liveParty.isConnected() ? liveParty.roster() : null;
 
@@ -379,33 +403,27 @@ class CurrentPanel extends JPanel
 
 		if (host && party.getInviteCode() != null)
 		{
-			String inviteCode = party.getInviteCode();
-			JLabel code = subLabel("Invite code: " + inviteCode + " (copy)");
-			code.setForeground(ColorScheme.BRAND_ORANGE);
-			code.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-			code.setToolTipText("Click to copy");
-			code.addMouseListener(new MouseAdapter()
-			{
-				@Override
-				public void mousePressed(MouseEvent e)
-				{
-					Toolkit.getDefaultToolkit().getSystemClipboard()
-						.setContents(new StringSelection(inviteCode), null);
-					setStatus("Invite code copied to clipboard.");
-				}
-			});
-			content.add(code);
+			content.add(copyRow("Invite code: " + party.getInviteCode(), party.getInviteCode(),
+				"Copy invite code", "Invite code copied to clipboard.", ColorScheme.LIGHT_GRAY_COLOR));
 		}
 		if (host && liveParty.passphrase() != null)
 		{
-			content.add(subLabel("Passphrase: " + liveParty.passphrase()));
+			content.add(copyRow("Passphrase: " + liveParty.passphrase(), liveParty.passphrase(),
+				"Copy passphrase", "Passphrase copied to clipboard.", ColorScheme.LIGHT_GRAY_COLOR));
+		}
+
+		// Ready check at the top (anyone can start; everyone readies up).
+		if (liveParty.isConnected())
+		{
+			content.add(Box.createVerticalStrut(8));
+			content.add(buildReadyCheck());
 		}
 
 		content.add(Box.createVerticalStrut(6));
 
 		if (roster == null || roster.isEmpty())
 		{
-			content.add(subLabel("Connecting to live room..."));
+			content.add(subLabel("Connecting to live room…"));
 		}
 		else
 		{
@@ -431,7 +449,7 @@ class CurrentPanel extends JPanel
 
 			if (!host && isLocalPending(roster))
 			{
-				content.add(subLabel("Awaiting host approval..."));
+				content.add(subLabel("Awaiting host approval…"));
 			}
 
 			if (anyPending && host)
@@ -456,13 +474,6 @@ class CurrentPanel extends JPanel
 		else
 		{
 			hostApplicationHandler.setPendingApplicants(java.util.Collections.emptyList(), null);
-		}
-
-		// Ready check (anyone can start; everyone readies up).
-		if (liveParty.isConnected())
-		{
-			content.add(Box.createVerticalStrut(8));
-			content.add(buildReadyCheck());
 		}
 
 		content.add(Box.createVerticalStrut(8));
@@ -538,31 +549,61 @@ class CurrentPanel extends JPanel
 		stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
 		stack.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-		// Line 1: a presence dot, then the name (click either - or the chevron - to
-		// inspect gear & stats).
+		// ---- primary row: dot · star · name ............ chevron (the one disclosure trigger) ----
+		JPanel topRow = cappedPanel(new BorderLayout(4, 0));
+		topRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		topRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+
 		boolean online = member.isOnline();
 		JLabel dot = new JLabel(online ? StatusIcons.ONLINE : StatusIcons.OFFLINE);
 		dot.setToolTipText(online ? "Online" : "Offline");
-		dot.addMouseListener(expandOnClick(member));
 
-		String tag = status == Status.HOST ? " (host)" : status == Status.PENDING ? " (pending)" : "";
-		String you = member.isLocal() ? " (you)" : "";
-		JLabel name = new JLabel(member.getName() + tag + you);
+		// Host gets a gold crown next to the name (not "(host)" text); we never label
+		// ourselves "(you)" — we know who we are.
+		String tag = status == Status.PENDING ? " (pending)" : "";
+		JLabel name = new JLabel(member.getName() + tag);
 		name.setForeground(status == Status.HOST ? ColorScheme.BRAND_ORANGE
 			: status == Status.PENDING ? ColorScheme.PROGRESS_INPROGRESS_COLOR : Color.WHITE);
 		applyAccountIcon(name, member.getData());
-		name.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		name.setToolTipText("Click to inspect gear & stats");
-		name.addMouseListener(expandOnClick(member));
 
-		JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-		nameRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		nameRow.add(dot);
-		nameRow.add(name);
-		addLine(stack, nameRow, 0);
+		JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		((FlowLayout) left.getLayout()).setAlignOnBaseline(true);
+		left.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		left.add(dot);
+		JButton star = memberStar(member);
+		if (star != null)
+		{
+			left.add(star);
+		}
+		if (status == Status.HOST && StatusIcons.CROWN != null)
+		{
+			JLabel crown = new JLabel(StatusIcons.CROWN);
+			crown.setToolTipText("Host");
+			left.add(crown);
+		}
+		left.add(name);
 
-		// The role this member is filling (ToB/CoX): from our own choice when it's
-		// us, otherwise from their live self-report.
+		// RuneWatch warning icon, trailing the name (point 31; non-ironman badge dropped).
+		RuneWatchCase flagged = runeWatch.get(member.getName());
+		if (flagged != null)
+		{
+			left.add(runeWatchBadge(flagged));
+		}
+
+		JLabel chevron = new JLabel(isExpanded ? StatusIcons.CHEVRON_UP : StatusIcons.CHEVRON_DOWN);
+		chevron.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		chevron.setToolTipText(isExpanded ? "Hide gear & stats" : "Show gear & stats");
+		chevron.setHorizontalAlignment(SwingConstants.CENTER);
+		chevron.setVerticalAlignment(SwingConstants.CENTER);
+		chevron.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 2));
+		chevron.addMouseListener(expandOnClick(member));
+
+		topRow.add(left, BorderLayout.CENTER);
+		topRow.add(chevron, BorderLayout.EAST);
+		stack.add(topRow);
+
+		// ---- secondary line: role · learner · world, plus the friends-chat icons ----
+		List<String> bits = new ArrayList<>();
 		if (activity != null && activity.hasRoles())
 		{
 			String roleId = member.isLocal()
@@ -570,56 +611,70 @@ class CurrentPanel extends JPanel
 				: (member.getData() != null ? member.getData().getRole() : null);
 			if (roleId != null)
 			{
-				JLabel roleLabel = new JLabel("Role: " + Role.displayNameOf(roleId));
-				roleLabel.setForeground(ColorScheme.BRAND_ORANGE);
-				roleLabel.setFont(FontManager.getRunescapeSmallFont());
-				addLine(stack, roleLabel, 16);
+				bits.add(Role.displayNameOf(roleId));
 			}
 		}
-
 		boolean memberLearner = member.isLocal()
 			? liveParty.isLocalLearner()
 			: (member.getData() != null && member.getData().isLearner());
 		if (memberLearner && activity != null && activity.isRaid())
 		{
-			JLabel learnerLabel = new JLabel("Learner");
-			learnerLabel.setForeground(ColorScheme.BRAND_ORANGE);
-			learnerLabel.setFont(FontManager.getRunescapeSmallFont());
-			addLine(stack, learnerLabel, 16);
+			bits.add("Learner");
+		}
+		PlayerUpdate data = member.getData();
+		int world = data != null ? data.getWorld() : 0;
+		if (world > 0)
+		{
+			bits.add("W" + world);
 		}
 
-		// Line 2: world + friends-chat indicator.
-		JComponent meta = buildMemberMeta(member, hostName);
-		if (meta != null)
+		JPanel metaRow = cappedPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		((FlowLayout) metaRow.getLayout()).setAlignOnBaseline(true);
+		metaRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		metaRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		metaRow.setBorder(BorderFactory.createEmptyBorder(0, 16, 2, 0));
+		boolean anyMeta = false;
+		if (!bits.isEmpty())
 		{
-			addLine(stack, meta, 16);
+			JLabel metaLabel = new JLabel(String.join("  ·  ", bits));
+			metaLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			metaLabel.setFont(FontManager.getRunescapeSmallFont());
+			metaRow.add(metaLabel);
+			anyMeta = true;
+		}
+		boolean showFc = hostName != null && data != null;
+		if (showFc)
+		{
+			if (StatusIcons.FRIENDS_CHAT != null)
+			{
+				JLabel fcLogo = new JLabel(StatusIcons.FRIENDS_CHAT);
+				fcLogo.setToolTipText(hostName + "'s friends chat");
+				metaRow.add(fcLogo);
+			}
+			boolean inFc = sameRsn(data.getFriendsChatOwner(), hostName);
+			JLabel fcIcon = new JLabel(inFc ? StatusIcons.CHECK : StatusIcons.CROSS);
+			fcIcon.setToolTipText(inFc
+				? "In " + hostName + "'s friends chat"
+				: "Not in " + hostName + "'s friends chat");
+			metaRow.add(fcIcon);
+			anyMeta = true;
+		}
+		if (anyMeta)
+		{
+			stack.add(metaRow);
 		}
 
-		// Warnings (RuneWatch / non-ironman) - each already self-indents.
-		RuneWatchCase flagged = runeWatch.get(member.getName());
-		if (flagged != null)
-		{
-			addLine(stack, runeWatchBadge(flagged), 0);
-		}
-		if (party.isIronmanOnly() && status != Status.HOST && member.getData() != null
-			&& !AccountTypes.isIronman(AccountTypes.fromName(member.getData().getAccountType())))
-		{
-			addLine(stack, warnBadge("Not an ironman"), 0);
-		}
-
-		// Line 3: action buttons.
+		// ---- action buttons ----
 		JComponent actions = buildActionsRow(activity, member, host, hostName);
 		if (actions != null)
 		{
-			addLine(stack, actions, 16);
+			JPanel actionRow = cappedPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+			actionRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			actionRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+			actionRow.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+			actionRow.add(actions);
+			stack.add(actionRow);
 		}
-
-		// Line 4: expand/collapse chevron (mirrors clicking the name).
-		JLabel chevron = new JLabel(isExpanded ? StatusIcons.CHEVRON_UP : StatusIcons.CHEVRON_DOWN);
-		chevron.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		chevron.setToolTipText(isExpanded ? "Hide gear & stats" : "Show gear & stats");
-		chevron.addMouseListener(expandOnClick(member));
-		addLine(stack, chevron, 16);
 
 		entry.add(stack, BorderLayout.NORTH);
 
@@ -631,14 +686,30 @@ class CurrentPanel extends JPanel
 		return entry;
 	}
 
-	private void addLine(JPanel stack, JComponent content, int indent)
+	/** A favorite-toggle star for any roster member (point 34), keyed by name. */
+	private JButton memberStar(RosterMember member)
 	{
-		JPanel row = cappedPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		row.setAlignmentX(Component.LEFT_ALIGNMENT);
-		row.setBorder(BorderFactory.createEmptyBorder(0, indent, 2, 0));
-		row.add(content);
-		stack.add(row);
+		// No star on yourself — you can't favorite your own account.
+		if (favoritesService == null || member.getName() == null || member.isLocal())
+		{
+			return null;
+		}
+		final String rsn = member.getName();
+		JButton star = new JButton();
+		star.setFocusPainted(false);
+		star.setContentAreaFilled(false);
+		star.setBorderPainted(false);
+		star.setMargin(new Insets(0, 2, 0, 2));
+		boolean fav = favoritesService.isFavorite(rsn);
+		star.setIcon(fav ? StatusIcons.STAR_FILLED : StatusIcons.STAR_OUTLINE);
+		star.setToolTipText(fav ? "Remove " + rsn + " from Favorites" : "Add " + rsn + " to Favorites");
+		star.addActionListener(e -> {
+			favoritesService.toggle(rsn);
+			boolean nowFav = favoritesService.isFavorite(rsn);
+			star.setIcon(nowFav ? StatusIcons.STAR_FILLED : StatusIcons.STAR_OUTLINE);
+			star.setToolTipText(nowFav ? "Remove " + rsn + " from Favorites" : "Add " + rsn + " to Favorites");
+		});
+		return star;
 	}
 
 	private MouseAdapter expandOnClick(RosterMember member)
@@ -698,78 +769,61 @@ class CurrentPanel extends JPanel
 			hop.setToolTipText("Hop to world " + world);
 			hop.addActionListener(e -> {
 				worldHopper.accept(world);
-				setStatus("Hopping to world " + world + "...");
+				setStatus("Hopping to world " + world + "…");
 			});
 			wrap.add(hop);
 			any = true;
 		}
 
-		// Host can ask a member who isn't in the host's own friends chat to join it,
-		// but only when the host actually has their own chat open.
-		if (host && data != null && hostName != null
-			&& !sameRsn(data.getFriendsChatOwner(), hostName)
-			&& sameRsn(friendsChatOwnerSupplier.get(), hostName))
+		// Per-activity "how to join the raid" prompt the host can send a member:
+		// CoX = join the host's friends chat; ToB = notice board; ToA = Grouping Obelisk.
+		if (host && data != null && activity != null)
 		{
-			long remaining = fcRequestCooldown.getOrDefault(member.getMemberId(), 0L) - System.currentTimeMillis();
-			boolean ready = remaining <= 0;
-			JButton request = smallButton(ready ? "Request FC" : "Requested");
-			request.setEnabled(ready);
-			request.setToolTipText(ready
-				? "Ask " + member.getName() + " to join your friends chat"
-				: "Wait a few seconds before asking again");
-			if (ready)
+			String kind = null;
+			String label = null;
+			String tip = null;
+			if (activity == Activity.CHAMBERS_OF_XERIC)
 			{
-				request.addActionListener(e -> requestFc(member, hostName));
+				// CoX coordinates via the host's friends chat: only when the host has one
+				// open and the member isn't already in it.
+				if (hostName != null && !sameRsn(data.getFriendsChatOwner(), hostName)
+					&& sameRsn(friendsChatOwnerSupplier.get(), hostName))
+				{
+					kind = "FC";
+					label = "Request FC";
+					tip = "Ask " + member.getName() + " to join your friends chat";
+				}
 			}
-			wrap.add(request);
-			any = true;
+			else if (activity == Activity.THEATRE_OF_BLOOD)
+			{
+				kind = "NOTICE_BOARD";
+				label = "Remind board";
+				tip = "Remind " + member.getName() + " to apply on the notice board";
+			}
+			else if (activity == Activity.TOMBS_OF_AMASCUT)
+			{
+				kind = "OBELISK";
+				label = "Remind obelisk";
+				tip = "Remind " + member.getName() + " to apply on the Grouping Obelisk";
+			}
+			if (kind != null)
+			{
+				long remaining = fcRequestCooldown.getOrDefault(member.getMemberId(), 0L) - System.currentTimeMillis();
+				boolean ready = remaining <= 0;
+				JButton prompt = smallButton(ready ? label : "Sent");
+				prompt.setEnabled(ready);
+				prompt.setToolTipText(ready ? tip : "Wait a few seconds before asking again");
+				final String k = kind;
+				if (ready)
+				{
+					prompt.addActionListener(e -> sendJoinPrompt(member, k, hostName));
+				}
+				wrap.add(prompt);
+				any = true;
+			}
 		}
 
 		return any ? wrap : null;
-	}
-
-	/**
-	 * The world / friends-chat indicator row: a check/cross shows whether the member
-	 * is in the <b>host's own</b> friends chat (the chat owned by the host, matched
-	 * on the host's name), or {@code null} when there's nothing to show.
-	 */
-	private JComponent buildMemberMeta(RosterMember member, String hostName)
-	{
-		PlayerUpdate data = member.getData();
-		int world = data != null ? data.getWorld() : 0;
-		boolean showFc = hostName != null && data != null;
-		boolean inFc = showFc && sameRsn(data.getFriendsChatOwner(), hostName);
-
-		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		boolean any = false;
-
-		if (world > 0)
-		{
-			JLabel worldLabel = new JLabel("W" + world);
-			worldLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			worldLabel.setFont(FontManager.getRunescapeSmallFont());
-			row.add(worldLabel);
-			any = true;
-		}
-
-		if (showFc)
-		{
-			if (StatusIcons.FRIENDS_CHAT != null)
-			{
-				JLabel fcLogo = new JLabel(StatusIcons.FRIENDS_CHAT);
-				fcLogo.setToolTipText(hostName + "'s friends chat");
-				row.add(fcLogo);
-			}
-			JLabel fcIcon = new JLabel(inFc ? StatusIcons.CHECK : StatusIcons.CROSS);
-			fcIcon.setToolTipText(inFc
-				? "In " + hostName + "'s friends chat"
-				: "Not in " + hostName + "'s friends chat");
-			row.add(fcIcon);
-			any = true;
-		}
-
-		return any ? row : null;
 	}
 
 	/** True if two RuneScape names refer to the same account (case- and space-insensitive). */
@@ -792,7 +846,7 @@ class CurrentPanel extends JPanel
 			JPanel waiting = new JPanel(new BorderLayout());
 			waiting.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 			waiting.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
-			waiting.add(detailLeft("Waiting for live data..."), BorderLayout.CENTER);
+			waiting.add(detailLeft("Waiting for live data…"), BorderLayout.CENTER);
 			return waiting;
 		}
 
@@ -966,7 +1020,7 @@ class CurrentPanel extends JPanel
 		else if (lookingUp)
 		{
 			detail.add(detailLeft(activityName + " KC"));
-			detail.add(detailRight("looking up..."));
+			detail.add(detailRight("looking up…"));
 		}
 
 		// Personal best (broadcast by the applicant's own client) for timed activities.
@@ -1120,10 +1174,19 @@ class CurrentPanel extends JPanel
 		refresh();
 	}
 
-	private void requestFc(RosterMember member, String hostFc)
+	private void sendJoinPrompt(RosterMember member, String kind, String hostFc)
 	{
-		liveParty.requestFriendsChat(member.getMemberId(), hostFc);
-		setStatus("Asked " + member.getName() + " to join friends chat \"" + hostFc + "\".");
+		if ("FC".equals(kind))
+		{
+			liveParty.sendJoinPrompt(member.getMemberId(), "FC", hostFc);
+			setStatus("Asked " + member.getName() + " to join friends chat \"" + hostFc + "\".");
+		}
+		else
+		{
+			liveParty.sendJoinPrompt(member.getMemberId(), kind, null);
+			String where = "OBELISK".equals(kind) ? "the Grouping Obelisk" : "the notice board";
+			setStatus("Reminded " + member.getName() + " to apply on " + where + ".");
+		}
 		// Throttle: keep the button disabled for a few seconds, then re-enable.
 		fcRequestCooldown.put(member.getMemberId(), System.currentTimeMillis() + FC_REQUEST_COOLDOWN_MS);
 		Timer reEnable = new Timer((int) FC_REQUEST_COOLDOWN_MS, e -> refresh());
@@ -1185,7 +1248,7 @@ class CurrentPanel extends JPanel
 		button.addActionListener(e -> {
 			if (host)
 			{
-				disband(party, button);
+				confirmDisband(party, button);
 			}
 			else
 			{
@@ -1196,10 +1259,38 @@ class CurrentPanel extends JPanel
 		return actions;
 	}
 
+	/**
+	 * Confirm before destroying a party you host (point 23), with a "Don't ask me
+	 * again" option persisted to config. Leaving (non-host) is not gated.
+	 */
+	private void confirmDisband(Party party, JButton button)
+	{
+		if (config != null && config.skipDisbandConfirm())
+		{
+			disband(party, button);
+			return;
+		}
+		JPanel msg = new JPanel(new BorderLayout(0, 6));
+		msg.add(new JLabel("Disband this party? All members will be removed."), BorderLayout.NORTH);
+		JCheckBox dontAsk = new JCheckBox("Don't ask me again");
+		msg.add(dontAsk, BorderLayout.CENTER);
+		int result = JOptionPane.showConfirmDialog(this, msg, "Disband party",
+			JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+		if (result != JOptionPane.OK_OPTION)
+		{
+			return;
+		}
+		if (dontAsk.isSelected() && configManager != null)
+		{
+			configManager.setConfiguration(OSPartyConfig.GROUP, "skipDisbandConfirm", true);
+		}
+		disband(party, button);
+	}
+
 	private void disband(Party party, JButton button)
 	{
 		button.setEnabled(false);
-		setStatus("Disbanding party...");
+		setStatus("Disbanding party…");
 		// Remove the ad (fire-and-forget) and close the live room. Read the host key
 		// before clear() wipes it.
 		partyService.disbandParty(party.getId(), party.getHost(), partyState.getHostKey(), ignored -> { }, error -> { });
@@ -1210,7 +1301,7 @@ class CurrentPanel extends JPanel
 	private void leave(JButton button)
 	{
 		button.setEnabled(false);
-		setStatus("Leaving party...");
+		setStatus("Leaving party…");
 		liveParty.leave();
 		partyState.clear();
 	}
@@ -1248,6 +1339,45 @@ class CurrentPanel extends JPanel
 		return button;
 	}
 
+	/** A label followed by an OS-safe copy-to-clipboard button (point 27). */
+	private JPanel copyRow(String labelText, String copyValue, String tooltip, String statusMsg, Color fg)
+	{
+		// BorderLayout so the copy button stays pinned at the right and a long passphrase
+		// truncates (with the full value in the tooltip) instead of pushing the button off.
+		JPanel row = cappedPanel(new BorderLayout(4, 0));
+		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		JLabel label = new JLabel(labelText);
+		label.setForeground(fg);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setToolTipText(copyValue);
+
+		JButton copy = new JButton(StatusIcons.COPY);
+		copy.setFocusPainted(false);
+		copy.setContentAreaFilled(false);
+		copy.setBorderPainted(false);
+		copy.setMargin(new Insets(0, 2, 0, 2));
+		copy.setToolTipText(tooltip);
+		copy.addActionListener(e -> {
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(copyValue), null);
+			setStatus(statusMsg);
+			// Brief green "Copied!" confirmation on the label, then revert.
+			label.setText("Copied!");
+			label.setForeground(new Color(0x4C, 0xD1, 0x37));
+			Timer revert = new Timer(1200, ev -> {
+				label.setText(labelText);
+				label.setForeground(fg);
+			});
+			revert.setRepeats(false);
+			revert.start();
+		});
+
+		row.add(label, BorderLayout.CENTER);
+		row.add(copy, BorderLayout.EAST);
+		return row;
+	}
+
 	private void applyAccountIcon(JLabel label, PlayerUpdate data)
 	{
 		if (data == null)
@@ -1283,25 +1413,17 @@ class CurrentPanel extends JPanel
 		}
 	}
 
-	private JLabel warnBadge(String text)
-	{
-		JLabel label = new JLabel("(!) " + text);
-		label.setForeground(ColorScheme.PROGRESS_ERROR_COLOR);
-		label.setFont(FontManager.getRunescapeSmallFont());
-		label.setBorder(BorderFactory.createEmptyBorder(2, 16, 0, 0));
-		return label;
-	}
-
 	private JLabel runeWatchBadge(RuneWatchCase flagged)
 	{
 		String reason = flagged.getReason() == null || flagged.getReason().isEmpty()
 			? "listed" : flagged.getReason();
 		// HTML width-caps the label so a long reason wraps instead of widening the card.
-		JLabel label = new JLabel("<html><div style='width:150px'>(!) "
+		JLabel label = new JLabel("<html><div style='width:150px'>"
 			+ flagged.sourceName() + ": " + escape(reason) + "</div></html>");
+		label.setIcon(StatusIcons.RUNEWATCH);
+		label.setIconTextGap(4);
 		label.setForeground(ColorScheme.PROGRESS_ERROR_COLOR);
 		label.setFont(FontManager.getRunescapeSmallFont());
-		label.setBorder(BorderFactory.createEmptyBorder(2, 16, 0, 0));
 
 		StringBuilder tip = new StringBuilder("<html>").append(flagged.sourceName()).append(" case");
 		if (flagged.getCode() != null)
@@ -1310,7 +1432,7 @@ class CurrentPanel extends JPanel
 		}
 		if (flagged.getRating() != null)
 		{
-			tip.append(" - evidence rating ").append(escape(flagged.getRating()));
+			tip.append(" — evidence rating ").append(escape(flagged.getRating()));
 		}
 		if (flagged.getDate() != null)
 		{
@@ -1369,6 +1491,45 @@ class CurrentPanel extends JPanel
 				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
 			}
 		};
+	}
+
+	/** A column that fills the scroll viewport's width so rows never clip horizontally. */
+	private static class ScrollableColumn extends JPanel implements Scrollable
+	{
+		ScrollableColumn(LayoutManager layout)
+		{
+			super(layout);
+		}
+
+		@Override
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		@Override
+		public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return 16;
+		}
+
+		@Override
+		public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return visibleRect.height;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
 	}
 
 	private void setStatus(String text)

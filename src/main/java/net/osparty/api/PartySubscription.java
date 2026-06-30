@@ -16,6 +16,9 @@ public interface PartySubscription extends AutoCloseable
 	 */
 	void setActivity(String activityId);
 
+	/** Force an immediate reconnect attempt when the socket is down. */
+	void reconnect();
+
 	/** Unsubscribe and close the underlying socket. Idempotent. */
 	@Override
 	void close();

@@ -13,8 +13,6 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -25,11 +23,14 @@ import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextArea;
 import javax.swing.Timer;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.game.SpriteManager;
@@ -46,6 +47,8 @@ import net.runelite.http.api.worlds.WorldRegion;
 abstract class PartyCardPanel extends JPanel
 {
 	protected static final long COOLDOWN_MS = 30_000;
+	/** Ads still searching past this many minutes are dimmed/flagged as stale (point 40). */
+	protected static final long STALE_MINUTES = 60;
 
 	// ---- shared dependencies -----------------------------------------------
 	protected final PartyService partyService;
@@ -68,6 +71,9 @@ abstract class PartyCardPanel extends JPanel
 	// ---- mutable apply state ------------------------------------------------
 	protected final Map<String, JButton> applyButtons = new HashMap<>();
 	protected final Map<String, Party> partiesById = new HashMap<>();
+	/** Per-card inline reason line (point 37) and inline role picker (point 15). */
+	protected final Map<String, JLabel> reasonLabels = new HashMap<>();
+	protected final Map<String, JPanel> rolePickers = new HashMap<>();
 	private final Map<String, Long> cooldownExpiry = new HashMap<>();
 	private Timer uiTimer;
 
@@ -281,24 +287,96 @@ abstract class PartyCardPanel extends JPanel
 		}
 
 		Activity activity = Activity.fromId(party.getActivity());
-		String role = null;
 		if (activity != null && activity.hasRoles())
 		{
-			role = promptForRole(party, activity);
-			if (role == null)
+			List<Role> opts = roleOptionsFor(party, activity);
+			if (opts.size() > 1)
 			{
+				// More than one role to choose: show the inline picker; the join fires
+				// from the picker's button callback (point 15).
+				showInlineRolePicker(party, opts);
 				return;
 			}
+			beginApply(party, opts.isEmpty() ? null : opts.get(0).getId());
+			return;
 		}
+		beginApply(party, null);
+	}
 
+	/** Disable the Apply button, show "Applying…", and join (leaving any current party first). */
+	private void beginApply(Party party, String role)
+	{
 		JButton button = applyButtons.get(party.getId());
 		if (button != null)
 		{
 			button.setEnabled(false);
-			button.setText("Applying...");
+			button.setText("Applying…");
 		}
-		final String chosenRole = role;
-		leaveCurrentThen(() -> doApply(party, chosenRole));
+		leaveCurrentThen(() -> doApply(party, role));
+	}
+
+	/** Roles the player may pick when applying: the needed roles, else all activity roles. */
+	private List<Role> roleOptionsFor(Party party, Activity activity)
+	{
+		List<Role> options = new ArrayList<>();
+		List<String> needed = neededRolesOf(party);
+		if (needed != null)
+		{
+			for (String id : needed)
+			{
+				Role role = Role.fromId(id);
+				if (role != null && !options.contains(role))
+				{
+					options.add(role);
+				}
+			}
+		}
+		if (options.isEmpty())
+		{
+			options.addAll(activity.roles(party.isHardMode()));
+		}
+		return options;
+	}
+
+	/** Populate and reveal the card's inline role picker (themed, non-modal). */
+	private void showInlineRolePicker(Party party, List<Role> options)
+	{
+		JPanel picker = rolePickers.get(party.getId());
+		if (picker == null)
+		{
+			return;
+		}
+		picker.removeAll();
+		JLabel prompt = new JLabel("Pick a role:");
+		prompt.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		prompt.setFont(FontManager.getRunescapeSmallFont());
+		prompt.setAlignmentX(Component.LEFT_ALIGNMENT);
+		picker.add(prompt);
+		for (Role role : options)
+		{
+			JButton b = new JButton(role.getDisplayName());
+			b.setFocusPainted(false);
+			b.setFont(FontManager.getRunescapeSmallFont());
+			b.setAlignmentX(Component.LEFT_ALIGNMENT);
+			b.addActionListener(e -> {
+				picker.setVisible(false);
+				beginApply(party, role.getId());
+			});
+			picker.add(b);
+		}
+		JButton cancelPick = new JButton("Cancel");
+		cancelPick.setFocusPainted(false);
+		cancelPick.setFont(FontManager.getRunescapeSmallFont());
+		cancelPick.setAlignmentX(Component.LEFT_ALIGNMENT);
+		cancelPick.addActionListener(e -> {
+			picker.setVisible(false);
+			revalidate();
+			repaint();
+		});
+		picker.add(cancelPick);
+		picker.setVisible(true);
+		revalidate();
+		repaint();
 	}
 
 	protected void cancel(Party party)
@@ -307,7 +385,7 @@ abstract class PartyCardPanel extends JPanel
 		if (button != null)
 		{
 			button.setEnabled(false);
-			button.setText("Leaving...");
+			button.setText("Leaving…");
 		}
 		liveParty.leave();
 		partyState.clear();
@@ -350,7 +428,7 @@ abstract class PartyCardPanel extends JPanel
 		String roleSuffix = role != null ? " as " + Role.displayNameOf(role) : "";
 		String learnerSuffix = learner ? " (learner)" : "";
 		setStatus("Joined " + party.getHost() + "'s room" + roleSuffix + learnerSuffix
-			+ " - awaiting host approval.");
+			+ " — awaiting host approval.");
 		updateAllButtons();
 	}
 
@@ -361,13 +439,15 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Log in");
 			button.setEnabled(false);
 			button.setToolTipText("Log in to apply to a party");
+			setReason(party, "", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		if (isOwnParty(party))
 		{
 			button.setText("Your party");
 			button.setEnabled(false);
-			button.setToolTipText("You host this party - manage it on the Current tab");
+			button.setToolTipText("You host this party — manage it on the Party tab");
+			setReason(party, "", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		if (isActive(party))
@@ -375,6 +455,7 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Cancel");
 			button.setEnabled(true);
 			button.setToolTipText("Withdraw your application");
+			setReason(party, "", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		if (!meetsIronmanRule(party))
@@ -382,6 +463,7 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Iron only");
 			button.setEnabled(false);
 			button.setToolTipText("This party is for ironman accounts");
+			setReason(party, "Ironman accounts only", ColorScheme.PROGRESS_ERROR_COLOR);
 			return;
 		}
 		if (party.isFull())
@@ -389,6 +471,7 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Full");
 			button.setEnabled(false);
 			button.setToolTipText(null);
+			setReason(party, "Party is full", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		long remaining = cooldownRemainingSeconds(party.getId());
@@ -397,6 +480,7 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Wait " + remaining + "s");
 			button.setEnabled(false);
 			button.setToolTipText("Recently applied to this party");
+			setReason(party, "Recently applied — wait " + remaining + "s", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		KcStatus kc = kcStatus(party);
@@ -405,41 +489,41 @@ abstract class PartyCardPanel extends JPanel
 			button.setText("Need KC");
 			button.setEnabled(false);
 			button.setToolTipText("You don't meet this party's minimum killcount");
+			setReason(party, "Below the required killcount", ColorScheme.PROGRESS_ERROR_COLOR);
 			return;
 		}
 		if (kc == KcStatus.PENDING)
 		{
-			button.setText("Checking KC...");
+			button.setText("Checking KC…");
 			button.setEnabled(false);
 			button.setToolTipText("Looking up your killcount on the hiscores");
+			setReason(party, "Checking your killcount…", ColorScheme.MEDIUM_GRAY_COLOR);
 			return;
 		}
 		button.setText("Apply");
 		button.setEnabled(true);
 		button.setToolTipText(partyState.isInParty() ? "Applying will leave your current party" : null);
+		setReason(party, "", ColorScheme.MEDIUM_GRAY_COLOR);
+	}
+
+	/** Set (or clear) the inline reason line beneath a card's Apply button. */
+	private void setReason(Party party, String text, Color color)
+	{
+		JLabel label = reasonLabels.get(party.getId());
+		if (label == null)
+		{
+			return;
+		}
+		label.setText(text);
+		label.setForeground(color);
+		label.setVisible(text != null && !text.isEmpty());
 	}
 
 	// ---- role prompt -------------------------------------------------------
 
 	protected String promptForRole(Party party, Activity activity)
 	{
-		List<Role> options = new ArrayList<>();
-		List<String> needed = neededRolesOf(party);
-		if (needed != null)
-		{
-			for (String id : needed)
-			{
-				Role role = Role.fromId(id);
-				if (role != null && !options.contains(role))
-				{
-					options.add(role);
-				}
-			}
-		}
-		if (options.isEmpty())
-		{
-			options.addAll(activity.roles(party.isHardMode()));
-		}
+		List<Role> options = roleOptionsFor(party, activity);
 		if (options.isEmpty())
 		{
 			return null;
@@ -466,14 +550,16 @@ abstract class PartyCardPanel extends JPanel
 		card.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 		card.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-		JPanel info = new JPanel(new GridLayout(0, 1));
+		JPanel info = new JPanel();
+		info.setLayout(new BoxLayout(info, BoxLayout.Y_AXIS));
 		info.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-		// Activity title
+		// Activity title (Tier-1 heading: bold)
 		JLabel activityLabel = new JLabel(activity != null
 			? activity.displayName(party.isHardMode(), party.getInvocation())
 			: party.getActivity());
 		activityLabel.setForeground(Color.WHITE);
+		activityLabel.setFont(FontManager.getRunescapeBoldFont());
 
 		// Host name (with account-type icon)
 		JLabel hostLabel = new JLabel(party.getHost() == null ? "Unknown host" : party.getHost());
@@ -510,11 +596,7 @@ abstract class PartyCardPanel extends JPanel
 		}
 		else
 		{
-			starBtn.setText(anyFav ? "★" : "☆");
-			starBtn.setFont(FontManager.getRunescapeSmallFont());
-			starBtn.setForeground(hostFav ? ColorScheme.BRAND_ORANGE
-				: anyFav ? ColorScheme.MEDIUM_GRAY_COLOR
-				: Color.DARK_GRAY);
+			starBtn.setIcon(anyFav ? StatusIcons.STAR_FILLED : StatusIcons.STAR_OUTLINE);
 		}
 		starBtn.setToolTipText(hostFav ? "Remove host from Favorites" : "Add host to Favorites");
 		starBtn.addActionListener(e -> {
@@ -529,10 +611,7 @@ abstract class PartyCardPanel extends JPanel
 				}
 				else
 				{
-					starBtn.setText(nowAnyFav ? "★" : "☆");
-					starBtn.setForeground(nowHostFav ? ColorScheme.BRAND_ORANGE
-						: nowAnyFav ? ColorScheme.MEDIUM_GRAY_COLOR
-						: Color.DARK_GRAY);
+					starBtn.setIcon(nowAnyFav ? StatusIcons.STAR_FILLED : StatusIcons.STAR_OUTLINE);
 				}
 				starBtn.setToolTipText(nowHostFav ? "Remove host from Favorites" : "Add host to Favorites");
 				onFavoriteToggled(party);
@@ -543,6 +622,7 @@ abstract class PartyCardPanel extends JPanel
 		// Host row: star | name
 		JPanel hostRow = new JPanel(new BorderLayout(2, 0));
 		hostRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		hostRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 		hostRow.add(starBtn, BorderLayout.WEST);
 		hostRow.add(hostLabel, BorderLayout.CENTER);
 
@@ -550,19 +630,27 @@ abstract class PartyCardPanel extends JPanel
 			? party.getSize() + "/" + party.getCapacity()
 			: String.valueOf(party.getSize());
 		StringBuilder sub = new StringBuilder(capacity).append(" players");
+		long ageMins = ageMinutes(System.currentTimeMillis(), party.getCreatedAt());
 		String age = formatAge(party.getCreatedAt());
 		if (age != null)
 		{
 			sub.append(", searching ").append(age);
 		}
+		boolean stale = ageMins >= STALE_MINUTES;
+		if (stale)
+		{
+			sub.append(" · stale");
+		}
 		JLabel meta = new JLabel(sub.toString());
-		meta.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		meta.setForeground(stale ? ColorScheme.MEDIUM_GRAY_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 		meta.setFont(FontManager.getRunescapeSmallFont());
+		meta.setAlignmentX(Component.LEFT_ALIGNMENT);
 
 		info.add(hostRow);
 		JLabel worldLabel = buildWorldLabel(party);
 		if (worldLabel != null)
 		{
+			worldLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 			info.add(worldLabel);
 		}
 		info.add(meta);
@@ -573,6 +661,7 @@ abstract class PartyCardPanel extends JPanel
 			JLabel tags = new JLabel(tagLine);
 			tags.setForeground(ColorScheme.BRAND_ORANGE);
 			tags.setFont(FontManager.getRunescapeSmallFont());
+			tags.setAlignmentX(Component.LEFT_ALIGNMENT);
 			info.add(tags);
 		}
 
@@ -582,39 +671,40 @@ abstract class PartyCardPanel extends JPanel
 			JLabel req = new JLabel(requirement);
 			req.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
 			req.setFont(FontManager.getRunescapeSmallFont());
+			req.setAlignmentX(Component.LEFT_ALIGNMENT);
 			info.add(req);
 		}
 
 		String needs = neededRolesText(activity, party);
 		if (needs != null)
 		{
-			for (String line : wrapByComma(needs, 30))
-			{
-				JLabel roles = new JLabel(line);
-				roles.setForeground(ColorScheme.BRAND_ORANGE);
-				roles.setFont(FontManager.getRunescapeSmallFont());
-				info.add(roles);
-			}
+			info.add(wrappedLabel(needs, ColorScheme.BRAND_ORANGE));
 		}
 
 		if (party.getDescription() != null && !party.getDescription().isEmpty())
 		{
-			JLabel desc = new JLabel(party.getDescription());
-			desc.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			desc.setFont(FontManager.getRunescapeSmallFont());
-			info.add(desc);
+			info.add(wrappedLabel(party.getDescription(), ColorScheme.LIGHT_GRAY_COLOR));
 		}
 
 		if (party.getLayout() != null && !party.getLayout().isEmpty())
 		{
-			for (String line : wrapByComma("Layout: " + party.getLayout(), 30))
-			{
-				JLabel layout = new JLabel(line);
-				layout.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
-				layout.setFont(FontManager.getRunescapeSmallFont());
-				info.add(layout);
-			}
+			info.add(wrappedLabel("Layout: " + party.getLayout(), ColorScheme.PROGRESS_INPROGRESS_COLOR));
 		}
+
+		// ---- bottom action panel: reason line + inline role picker + full-width Apply ----
+		JLabel reasonLabel = new JLabel();
+		reasonLabel.setFont(FontManager.getRunescapeSmallFont());
+		reasonLabel.setForeground(ColorScheme.PROGRESS_ERROR_COLOR);
+		reasonLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		reasonLabel.setVisible(false);
+		reasonLabels.put(party.getId(), reasonLabel);
+
+		JPanel rolePicker = new JPanel();
+		rolePicker.setLayout(new BoxLayout(rolePicker, BoxLayout.Y_AXIS));
+		rolePicker.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		rolePicker.setAlignmentX(Component.LEFT_ALIGNMENT);
+		rolePicker.setVisible(false);
+		rolePickers.put(party.getId(), rolePicker);
 
 		JButton applyButton = new JButton("Apply");
 		applyButton.setFocusPainted(false);
@@ -631,19 +721,41 @@ abstract class PartyCardPanel extends JPanel
 		applyButtons.put(party.getId(), applyButton);
 		partiesById.put(party.getId(), party);
 
-		JPanel buttonWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
-		buttonWrap.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		buttonWrap.add(applyButton);
+		// Full-width Apply as the primary action.
+		JPanel applyWrap = new JPanel(new BorderLayout());
+		applyWrap.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		applyWrap.setAlignmentX(Component.LEFT_ALIGNMENT);
+		applyWrap.add(applyButton, BorderLayout.CENTER);
 
-		JPanel header = new JPanel(new BorderLayout(6, 0));
-		header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		header.add(activityLabel, BorderLayout.CENTER);
-		header.add(buttonWrap, BorderLayout.EAST);
+		JPanel actionPanel = new JPanel();
+		actionPanel.setLayout(new BoxLayout(actionPanel, BoxLayout.Y_AXIS));
+		actionPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		actionPanel.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		actionPanel.add(reasonLabel);
+		actionPanel.add(rolePicker);
+		actionPanel.add(applyWrap);
 
-		card.add(header, BorderLayout.NORTH);
+		card.add(activityLabel, BorderLayout.NORTH);
 		card.add(info, BorderLayout.CENTER);
+		card.add(actionPanel, BorderLayout.SOUTH);
 
 		return card;
+	}
+
+	/** A read-only, layout-wrapping text component (replaces manual char-count wrapping). */
+	private static JComponent wrappedLabel(String text, Color fg)
+	{
+		JTextArea area = new JTextArea(text);
+		area.setLineWrap(true);
+		area.setWrapStyleWord(true);
+		area.setEditable(false);
+		area.setFocusable(false);
+		area.setOpaque(false);
+		area.setBorder(null);
+		area.setFont(FontManager.getRunescapeSmallFont());
+		area.setForeground(fg);
+		area.setAlignmentX(Component.LEFT_ALIGNMENT);
+		return area;
 	}
 
 	/** Notifies the sibling panel (Search↔Favorites) that a favorite was toggled. */
@@ -775,33 +887,6 @@ abstract class PartyCardPanel extends JPanel
 			return party.getNeededRoles();
 		}
 		return party.getRequiredRoles();
-	}
-
-	protected static List<String> wrapByComma(String text, int max)
-	{
-		List<String> lines = new ArrayList<>();
-		StringBuilder line = new StringBuilder();
-		for (String part : text.split(", "))
-		{
-			if (line.length() == 0)
-			{
-				line.append(part);
-			}
-			else if (line.length() + 2 + part.length() <= max)
-			{
-				line.append(", ").append(part);
-			}
-			else
-			{
-				lines.add(line + ",");
-				line = new StringBuilder(part);
-			}
-		}
-		if (line.length() > 0)
-		{
-			lines.add(line.toString());
-		}
-		return lines;
 	}
 
 	protected static long ageMinutes(long now, long createdAt)

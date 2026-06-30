@@ -11,7 +11,7 @@ import com.google.gson.Gson;
 import net.osparty.runewatch.RuneWatchService;
 import java.awt.BorderLayout;
 import java.awt.Cursor;
-import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.image.BufferedImage;
 import java.util.Set;
 import java.util.function.IntConsumer;
@@ -25,6 +25,7 @@ import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import net.osparty.WorldPinger;
 import net.runelite.client.config.ConfigManager;
@@ -40,7 +41,7 @@ import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
 /**
- * Root side-panel. Hosts Search / Favorites always, plus Create when idle and Current
+ * Root side-panel. Hosts Search / Favorites always, plus Create when idle and Party
  * while in a party (hosting or joined). All tabs share a single {@link PartyState}
  * so the one-party-at-a-time rule and tab visibility stay in sync.
  */
@@ -51,6 +52,7 @@ public class OSPartyPanel extends PluginPanel
 	// with runelite-plugin.properties on each release.
 	private static final String VERSION = "1.0.4";
 	private static final String GITHUB_URL = "https://github.com/iodrareg/osparty";
+	private static final String DISCORD_URL = "https://discord.gg/3xrf7wkb5F";
 
 	private final PartyState partyState;
 	private final LiveParty liveParty;
@@ -60,9 +62,9 @@ public class OSPartyPanel extends PluginPanel
 	private final MaterialTab searchTab;
 	private final MaterialTab createTab;
 	private final MaterialTab favesTab;
-	private final MaterialTab currentTab;
+	private final MaterialTab partyTab;
 	private boolean wasInParty;
-	/** Whether the tab bar is in the in-party layout (Current shown, Create hidden). */
+	/** Whether the tab bar is in the in-party layout (Party shown, Create hidden). */
 	private boolean inPartyTabLayout;
 
 	public OSPartyPanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
@@ -99,26 +101,34 @@ public class OSPartyPanel extends PluginPanel
 		searchPanel.setOnFavoriteChanged(favoritesPanel::render);
 		favoritesPanel.setOnFavoriteChanged(searchPanel::renderCurrent);
 		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
-			accountTypeSupplier, mapRegionsSupplier, coxLayoutSupplier, configManager, gson);
-		CurrentPanel currentPanel = new CurrentPanel(partyService, playerNameSupplier,
+			accountTypeSupplier, mapRegionsSupplier, coxLayoutSupplier, configManager, gson,
+			killcountService, worldSupplier);
+		PartyPanel partyPanel = new PartyPanel(partyService, playerNameSupplier,
 			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService, killcountService,
-			skillIconManager, worldSupplier, worldHopper, friendsChatOwnerSupplier, coxLayoutSupplier);
+			skillIconManager, worldSupplier, worldHopper, friendsChatOwnerSupplier, coxLayoutSupplier,
+			config, configManager, favoritesService);
 
 		JPanel display = new JPanel(new BorderLayout());
 		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
+		JScrollPane createScroll = new JScrollPane(createPanel,
+			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		createScroll.setBorder(BorderFactory.createEmptyBorder());
+		createScroll.getVerticalScrollBar().setUnitIncrement(16);
+		createScroll.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
 		tabGroup = new MaterialTabGroup(display);
 		searchTab = new MaterialTab("Search", tabGroup, searchPanel);
-		createTab = new MaterialTab("Create", tabGroup, createPanel);
+		createTab = new MaterialTab("Party", tabGroup, createScroll);
 		favesTab = new MaterialTab("Favorites", tabGroup, favoritesPanel);
-		currentTab = new MaterialTab("Current", tabGroup, currentPanel);
+		partyTab = new MaterialTab("Party", tabGroup, partyPanel);
 
 		// Register every tab with the group (needed for select()), then lay out the
-		// idle bar. In-party swaps Create for Current (see rebuildTabs).
+		// idle bar. In-party swaps Create for Party (see rebuildTabs).
 		tabGroup.addTab(searchTab);
 		tabGroup.addTab(createTab);
 		tabGroup.addTab(favesTab);
-		tabGroup.addTab(currentTab);
+		tabGroup.addTab(partyTab);
 		rebuildTabs(false);
 		tabGroup.select(searchTab);
 
@@ -146,9 +156,7 @@ public class OSPartyPanel extends PluginPanel
 		BufferedImage logo = ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/github.png");
 		if (logo != null)
 		{
-			BufferedImage scaled = ImageUtil.resizeImage(logo, 16, 16);
-			github.setIcon(new ImageIcon(scaled));
-			github.setText(" GitHub");
+			github.setIcon(new ImageIcon(ImageUtil.resizeImage(logo, 16, 16)));
 		}
 		else
 		{
@@ -156,9 +164,33 @@ public class OSPartyPanel extends PluginPanel
 		}
 		github.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		github.setFont(FontManager.getRunescapeSmallFont());
-		github.setPreferredSize(new Dimension(80, 20));
 		github.addActionListener(e -> LinkBrowser.browse(GITHUB_URL));
-		footer.add(github, BorderLayout.WEST);
+
+		// Placeholder Discord button next to GitHub (icon only; no invite link wired up yet).
+		JButton discord = new JButton();
+		discord.setToolTipText("Open the OSParty Discord");
+		discord.setFocusPainted(false);
+		discord.setBorder(BorderFactory.createEmptyBorder());
+		discord.setContentAreaFilled(false);
+		discord.setCursor(new Cursor(Cursor.HAND_CURSOR));
+		BufferedImage discordLogo = ImageUtil.loadImageResource(getClass(), "/net/osparty/icons/discord.png");
+		if (discordLogo != null)
+		{
+			discord.setIcon(new ImageIcon(ImageUtil.resizeImage(discordLogo, 16, 16)));
+		}
+		else
+		{
+			discord.setText("Discord");
+			discord.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			discord.setFont(FontManager.getRunescapeSmallFont());
+		}
+		discord.addActionListener(e -> LinkBrowser.browse(DISCORD_URL));
+
+		JPanel links = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+		links.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		links.add(github);
+		links.add(discord);
+		footer.add(links, BorderLayout.WEST);
 
 		JLabel version = new JLabel("v" + VERSION);
 		version.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -195,13 +227,13 @@ public class OSPartyPanel extends PluginPanel
 		boolean inParty = partyState.isInParty();
 
 		// Switch away from tabs that are about to be removed from the bar.
-		if (!inParty && currentTab.isSelected())
+		if (!inParty && partyTab.isSelected())
 		{
 			tabGroup.select(searchTab);
 		}
 		else if (inParty && createTab.isSelected())
 		{
-			tabGroup.select(currentTab);
+			tabGroup.select(partyTab);
 		}
 
 		if (inParty != inPartyTabLayout)
@@ -212,7 +244,7 @@ public class OSPartyPanel extends PluginPanel
 
 		if (inParty && !wasInParty)
 		{
-			tabGroup.select(currentTab);
+			tabGroup.select(partyTab);
 		}
 
 		wasInParty = inParty;
@@ -222,19 +254,19 @@ public class OSPartyPanel extends PluginPanel
 
 	/**
 	 * Rebuild the tab bar for idle vs in-party. Idle: Search | Create | Favorites.
-	 * In-party: Search | Current | Favorites (Create hidden — you can only be in one party).
+	 * In-party: Search | Party | Favorites (Create hidden — you can only be in one party).
 	 */
 	private void rebuildTabs(boolean inParty)
 	{
 		tabGroup.remove(searchTab);
 		tabGroup.remove(createTab);
 		tabGroup.remove(favesTab);
-		tabGroup.remove(currentTab);
+		tabGroup.remove(partyTab);
 
 		tabGroup.add(searchTab);
 		if (inParty)
 		{
-			tabGroup.add(currentTab);
+			tabGroup.add(partyTab);
 		}
 		else
 		{

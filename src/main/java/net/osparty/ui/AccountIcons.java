@@ -1,5 +1,6 @@
 package net.osparty.ui;
 
+import java.awt.image.BufferedImage;
 import javax.swing.ImageIcon;
 import net.runelite.api.vars.AccountType;
 import net.runelite.client.util.ImageUtil;
@@ -10,6 +11,8 @@ import net.runelite.client.util.ImageUtil;
  */
 final class AccountIcons
 {
+	private static final int SIZE = 16;
+
 	private static final ImageIcon IRONMAN = load("ironman");
 	private static final ImageIcon HARDCORE_IRONMAN = load("hardcore_ironman");
 	private static final ImageIcon ULTIMATE_IRONMAN = load("ultimate_ironman");
@@ -22,7 +25,19 @@ final class AccountIcons
 
 	private static ImageIcon load(String name)
 	{
-		return new ImageIcon(ImageUtil.loadImageResource(AccountIcons.class, "/net/osparty/icons/" + name + ".png"));
+		try
+		{
+			BufferedImage img = ImageUtil.loadImageResource(AccountIcons.class, "/net/osparty/icons/" + name + ".png");
+			if (img == null)
+			{
+				return null;
+			}
+			return new ImageIcon(ImageUtil.resizeImage(img, SIZE, SIZE));
+		}
+		catch (Exception e)
+		{
+			return null;
+		}
 	}
 
 	/** @return the badge for {@code type}, or {@code null} for a normal account / unknown. */
