@@ -134,6 +134,8 @@ class PartyPanel extends JPanel
 	private final Set<Long> notifiedPending = new HashSet<>();
 	private int lastReportedSize = -1;
 	private String lastReportedLayout;
+	/** Invoked when the host clicks "Edit party"; wired by the owning panel to open the edit form. */
+	private Runnable onEditParty;
 	/** memberId -> epoch millis until which the "Request FC" button is on cooldown. */
 	private final Map<Long, Long> fcRequestCooldown = new HashMap<>();
 	private static final long FC_REQUEST_COOLDOWN_MS = 10_000;
@@ -1239,9 +1241,18 @@ class PartyPanel extends JPanel
 
 	private JPanel buildActions(Party party, boolean host)
 	{
-		JPanel actions = cappedPanel(new BorderLayout());
+		JPanel actions = cappedPanel(new BorderLayout(0, 4));
 		actions.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		actions.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		// Host-only: edit the advertised settings of this party.
+		if (host && onEditParty != null)
+		{
+			JButton edit = new JButton("Edit party");
+			edit.setFocusPainted(false);
+			edit.addActionListener(e -> onEditParty.run());
+			actions.add(edit, BorderLayout.NORTH);
+		}
 
 		JButton button = new JButton(host ? "Disband party" : "Leave party");
 		button.setFocusPainted(false);
@@ -1257,6 +1268,12 @@ class PartyPanel extends JPanel
 		});
 		actions.add(button, BorderLayout.CENTER);
 		return actions;
+	}
+
+	/** Wire the host-only "Edit party" button to the owning panel's edit flow. */
+	void setOnEditParty(Runnable onEditParty)
+	{
+		this.onEditParty = onEditParty;
 	}
 
 	/**

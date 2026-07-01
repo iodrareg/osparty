@@ -6,6 +6,7 @@ import net.osparty.model.AccountTypes;
 import net.osparty.model.Activity;
 import net.osparty.model.LootRule;
 import net.osparty.model.Party;
+import net.osparty.model.PartyEditRequest;
 import net.osparty.model.PartyPreset;
 import net.osparty.model.PartyRequest;
 import net.osparty.model.Role;
@@ -125,6 +126,11 @@ class CreatePanel extends JPanel implements Scrollable
 
 	private static final String LOGIN_HINT = "Log in to create a party.";
 	private boolean creating;
+
+	/** True while the form is editing an existing hosted party rather than creating one. */
+	private boolean editing;
+	/** Invoked after a successful edit so the owning panel can return to the Party tab. */
+	private Runnable onEditDone;
 
 	CreatePanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
 		PartyState partyState, LiveParty liveParty, Supplier<AccountType> accountTypeSupplier,
@@ -280,7 +286,16 @@ class CreatePanel extends JPanel implements Scrollable
 
 		createButton.setFocusPainted(false);
 		createButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-		createButton.addActionListener(e -> create());
+		createButton.addActionListener(e -> {
+			if (editing)
+			{
+				saveEdit();
+			}
+			else
+			{
+				create();
+			}
+		});
 		add(createButton);
 
 		statusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
@@ -942,31 +957,13 @@ class CreatePanel extends JPanel implements Scrollable
 		// Roles (ToB/CoX): the composition must fill exactly the party size, and the
 		// host's chosen role must be one of those slots (the host fills it). ToB's
 		// composition is fixed by size, so it always validates; CoX is host-defined.
-		final List<String> requiredRoles;
-		final String hostRole;
-		if (activity.hasRoles())
+		RoleSelection selection = captureRoleSelection(activity, capacity);
+		if (selection == null)
 		{
-			requiredRoles = captureRequiredRoles(activity, capacity);
-			int assigned = requiredRoles == null ? 0 : requiredRoles.size();
-			if (assigned != capacity)
-			{
-				setStatus("Assign exactly " + capacity + " role slots (currently " + assigned + ").");
-				return;
-			}
-			Role mine = (Role) myRoleDropdown.getSelectedItem();
-			hostRole = mine != null ? mine.getId() : null;
-			if (hostRole == null || !requiredRoles.contains(hostRole))
-			{
-				setStatus("Add at least one " + (mine != null ? mine.getDisplayName() : "of your role")
-					+ " slot — that's the role you'll fill.");
-				return;
-			}
+			return;
 		}
-		else
-		{
-			requiredRoles = null;
-			hostRole = null;
-		}
+		final List<String> requiredRoles = selection.requiredRoles;
+		final String hostRole = selection.hostRole;
 
 		// Remember these settings so the form is pre-filled next time.
 		saveLastPreset(captureForm(null));
@@ -1043,6 +1040,225 @@ class CreatePanel extends JPanel implements Scrollable
 		label.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.BOLD));
 		row.add(label, BorderLayout.WEST);
 		return row;
+	}
+
+	/** The host's validated role composition + own role for the current form. */
+	private static final class RoleSelection
+	{
+		final List<String> requiredRoles;
+		final String hostRole;
+
+		RoleSelection(List<String> requiredRoles, String hostRole)
+		{
+			this.requiredRoles = requiredRoles;
+			this.hostRole = hostRole;
+		}
+	}
+
+	/**
+	 * Validate and capture the role composition for {@code activity} at {@code capacity}. Returns
+	 * the selection, or null after setting a status message when the composition is invalid.
+	 * Activities without roles return an empty selection.
+	 */
+	private RoleSelection captureRoleSelection(Activity activity, int capacity)
+	{
+		if (!activity.hasRoles())
+		{
+			return new RoleSelection(null, null);
+		}
+		List<String> requiredRoles = captureRequiredRoles(activity, capacity);
+		int assigned = requiredRoles == null ? 0 : requiredRoles.size();
+		if (assigned != capacity)
+		{
+			setStatus("Assign exactly " + capacity + " role slots (currently " + assigned + ").");
+			return null;
+		}
+		Role mine = (Role) myRoleDropdown.getSelectedItem();
+		String hostRole = mine != null ? mine.getId() : null;
+		if (hostRole == null || !requiredRoles.contains(hostRole))
+		{
+			setStatus("Add at least one " + (mine != null ? mine.getDisplayName() : "of your role")
+				+ " slot — that's the role you'll fill.");
+			return null;
+		}
+		return new RoleSelection(requiredRoles, hostRole);
+	}
+
+	// ---- edit an existing hosted party ---------------------------------------
+
+	/** Called by the owning panel to return to the Party tab after a successful save. */
+	void setOnEditDone(Runnable onEditDone)
+	{
+		this.onEditDone = onEditDone;
+	}
+
+	/**
+	 * Switch the form into edit mode, pre-filled from {@code party}. The activity can't be
+	 * changed (it keys the live room and the role/difficulty model), so its dropdown is locked.
+	 */
+	void enterEditMode(Party party)
+	{
+		if (party == null)
+		{
+			return;
+		}
+		editing = true;
+		applyPreset(partyToPreset(party));
+		activityDropdown.setEnabled(false);
+		createButton.setText("Save changes");
+		createButton.setEnabled(true);
+		setStatus("Editing your party — the activity can't be changed.");
+	}
+
+	/** Leave edit mode and restore the create form (defaults / last preset). */
+	void exitEditMode()
+	{
+		if (!editing)
+		{
+			return;
+		}
+		editing = false;
+		activityDropdown.setEnabled(true);
+		createButton.setText("Create party");
+		applyPreset(loadLastPreset());
+		applyRecommendation();
+		updateLoginState();
+	}
+
+	/** Map a hosted {@link Party} onto a {@link PartyPreset} so {@link #applyPreset} can fill the form. */
+	private PartyPreset partyToPreset(Party party)
+	{
+		PartyPreset preset = new PartyPreset();
+		preset.setActivityId(party.getActivity());
+		preset.setCapacity(party.getCapacity());
+		preset.setLootRule(party.getLootRule());
+		preset.setMinKc(party.getMinKillCount());
+		preset.setHardKc(party.getMinHardModeKillCount());
+		preset.setWorld(party.getWorld());
+		preset.setDescription(party.getDescription());
+		preset.setPrivateParty(party.isPrivateParty());
+		preset.setIronmanOnly(party.isIronmanOnly());
+		preset.setIncludeLayout(partyState.isAdvertiseLayout());
+		preset.setHardMode(party.isHardMode());
+		preset.setInvocation(party.getInvocation());
+		preset.setLearner(party.isLearner());
+		preset.setTeacher(party.isTeacher());
+		preset.setRequiredRoles(party.getRequiredRoles());
+		preset.setHostRole(party.getHostRole());
+		return preset;
+	}
+
+	private void saveEdit()
+	{
+		Party party = partyState.getCurrentParty();
+		if (party == null || !partyState.isHost())
+		{
+			setStatus("You're not hosting a party to edit.");
+			return;
+		}
+
+		Activity activity = (Activity) activityDropdown.getSelectedItem();
+		if (activity == null)
+		{
+			return;
+		}
+
+		int capacity = (Integer) capacitySpinner.getValue();
+		// Can't shrink the party below the people already in it (host + admitted members).
+		int present = liveParty.isConnected()
+			? (int) liveParty.roster().stream()
+				.filter(m -> m.getStatus() != net.osparty.party.LiveParty.Status.PENDING).count()
+			: 1;
+		if (capacity < present)
+		{
+			setStatus("Capacity can't be below the " + present + " already in the party.");
+			return;
+		}
+
+		int minHardKc = activity.hasHardMode() ? (Integer) hardKcSpinner.getValue() : 0;
+		String description = descriptionArea.getText().trim();
+		// World is always the host's live world (the manual field was removed).
+		int hostWorld = worldSupplier != null ? worldSupplier.getAsInt() : 0;
+		String world = hostWorld > 0 ? Integer.toString(hostWorld) : "";
+		int minKc = (Integer) minKcSpinner.getValue();
+		LootRule loot = (LootRule) lootDropdown.getSelectedItem();
+		String lootRule = (loot == null ? LootRule.UNSPECIFIED : loot).name();
+		boolean privateParty = privateCheck.isSelected();
+		boolean ironmanOnly = ironmanCheck.isSelected();
+		AccountType accountType = accountTypeSupplier.get();
+		if (ironmanOnly && !AccountTypes.isIronman(accountType))
+		{
+			setStatus("Only ironman accounts can host an ironman-only party.");
+			return;
+		}
+
+		boolean advertiseLayout = includeLayoutCheck.isSelected() && "cox".equals(activity.getId());
+		boolean hardMode = activity.hasHardMode() && !activity.usesInvocation() && hardModeCheck.isSelected();
+		int invocation = activity.usesInvocation() ? (Integer) invocationSpinner.getValue() : 0;
+		boolean learner = activity.isRaid() && learnerCheck.isSelected();
+		boolean teacher = activity.isRaid() && teacherCheck.isSelected();
+
+		RoleSelection selection = captureRoleSelection(activity, capacity);
+		if (selection == null)
+		{
+			return;
+		}
+
+		// Remember the new settings so a future create is pre-filled with them too.
+		saveLastPreset(captureForm(null));
+
+		PartyEditRequest edit = new PartyEditRequest(description, capacity, world, minKc, minHardKc, lootRule,
+			privateParty, ironmanOnly, invocation, hardMode, selection.requiredRoles, selection.hostRole,
+			learner, teacher);
+
+		createButton.setEnabled(false);
+		setStatus("Saving changes…");
+		partyService.editParty(party.getId(), partyState.getHostKey(), edit,
+			ignored -> SwingUtilities.invokeLater(() -> onEdited(party, edit, advertiseLayout)),
+			error -> SwingUtilities.invokeLater(() -> {
+				createButton.setEnabled(true);
+				setStatus("Edit failed — " + net.osparty.api.PartyErrors.friendly(error));
+			}));
+	}
+
+	/** Apply the saved edit to our local party copy and the live room, then leave edit mode. */
+	private void onEdited(Party party, PartyEditRequest edit, boolean advertiseLayout)
+	{
+		createButton.setEnabled(true);
+
+		// Reflect the edit on our local hosted-party copy so the Party tab updates at once
+		// (the server's own 'updated' broadcast only refreshes the search list).
+		party.setDescription(edit.getDescription());
+		party.setCapacity(edit.getCapacity());
+		party.setWorld(edit.getWorld());
+		party.setMinKillCount(edit.getMinKillCount());
+		party.setMinHardModeKillCount(edit.getMinHardModeKillCount());
+		party.setLootRule(edit.getLootRule());
+		party.setPrivateParty(edit.isPrivateParty());
+		party.setIronmanOnly(edit.isIronmanOnly());
+		party.setInvocation(edit.getInvocation());
+		party.setHardMode(edit.isHardMode());
+		party.setRequiredRoles(edit.getRequiredRoles());
+		party.setHostRole(edit.getHostRole());
+		party.setLearner(edit.isLearner());
+		party.setTeacher(edit.isTeacher());
+
+		partyState.setAdvertiseLayout(advertiseLayout);
+		partyState.update(party);
+
+		// Sync the live P2P room so admit limits, the host's role and learner/teacher markers
+		// follow the edit and re-broadcast to members.
+		liveParty.setCapacity(edit.getCapacity());
+		liveParty.setLocalRole(edit.getHostRole());
+		liveParty.setLocalLearner(edit.isLearner());
+		liveParty.setLocalTeacher(edit.isTeacher());
+
+		exitEditMode();
+		setStatus("Party updated.");
+		if (onEditDone != null)
+		{
+			onEditDone.run();
+		}
 	}
 
 	private void setStatus(String text)

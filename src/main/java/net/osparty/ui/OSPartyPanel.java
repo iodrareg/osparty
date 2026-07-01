@@ -58,6 +58,8 @@ public class OSPartyPanel extends PluginPanel
 	private final LiveParty liveParty;
 	private final SearchPanel searchPanel;
 	private final FriendsPanel favoritesPanel;
+	private final CreatePanel createPanel;
+	private final PartyPanel partyPanel;
 	private final MaterialTabGroup tabGroup;
 	private final MaterialTab searchTab;
 	private final MaterialTab createTab;
@@ -66,6 +68,8 @@ public class OSPartyPanel extends PluginPanel
 	private boolean wasInParty;
 	/** Whether the tab bar is in the in-party layout (Party shown, Create hidden). */
 	private boolean inPartyTabLayout;
+	/** Whether the host is editing their party (the create form is shown alongside the roster). */
+	private boolean editing;
 
 	public OSPartyPanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
 		HostApplicationHandler hostApplicationHandler, Supplier<String> friendsChatOwnerSupplier,
@@ -100,13 +104,18 @@ public class OSPartyPanel extends PluginPanel
 		// Cross-notify: toggling a favorite in Search refreshes the Favorites tab and vice versa.
 		searchPanel.setOnFavoriteChanged(favoritesPanel::render);
 		favoritesPanel.setOnFavoriteChanged(searchPanel::renderCurrent);
-		CreatePanel createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
+		createPanel = new CreatePanel(partyService, config, playerNameSupplier, partyState, liveParty,
 			accountTypeSupplier, mapRegionsSupplier, coxLayoutSupplier, configManager, gson,
 			killcountService, worldSupplier);
-		PartyPanel partyPanel = new PartyPanel(partyService, playerNameSupplier,
+		partyPanel = new PartyPanel(partyService, playerNameSupplier,
 			hostApplicationHandler, partyState, itemManager, liveParty, runeWatchService, killcountService,
 			skillIconManager, worldSupplier, worldHopper, friendsChatOwnerSupplier, coxLayoutSupplier,
 			config, configManager, favoritesService);
+
+		// Host edit flow: the Party tab's "Edit party" button opens the create form in edit
+		// mode; saving returns to the Party (roster) tab.
+		partyPanel.setOnEditParty(this::openEditParty);
+		createPanel.setOnEditDone(this::finishEditParty);
 
 		JPanel display = new JPanel(new BorderLayout());
 		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -226,17 +235,26 @@ public class OSPartyPanel extends PluginPanel
 	{
 		boolean inParty = partyState.isInParty();
 
+		// The party ended while editing — drop edit mode (and its tab layout) first.
+		if (!inParty && editing)
+		{
+			editing = false;
+			createTab.setText("Party");
+			createPanel.exitEditMode();
+		}
+
 		// Switch away from tabs that are about to be removed from the bar.
 		if (!inParty && partyTab.isSelected())
 		{
 			tabGroup.select(searchTab);
 		}
-		else if (inParty && createTab.isSelected())
+		else if (inParty && !editing && createTab.isSelected())
 		{
 			tabGroup.select(partyTab);
 		}
 
-		if (inParty != inPartyTabLayout)
+		// Don't touch the tab bar mid-edit; finishEditParty restores it.
+		if (!editing && inParty != inPartyTabLayout)
 		{
 			inPartyTabLayout = inParty;
 			rebuildTabs(inParty);
@@ -250,6 +268,55 @@ public class OSPartyPanel extends PluginPanel
 		wasInParty = inParty;
 		revalidate();
 		repaint();
+	}
+
+	/** Host clicked "Edit party": open the create form in edit mode beside the Party (roster) tab. */
+	private void openEditParty()
+	{
+		Party party = partyState.getCurrentParty();
+		if (party == null || !partyState.isHost())
+		{
+			return;
+		}
+		editing = true;
+		createPanel.enterEditMode(party);
+		createTab.setText("Edit");
+		rebuildTabsForEdit();
+		tabGroup.select(createTab);
+	}
+
+	/** Edit saved (or finished): restore the normal tab bar and return to the Party tab. */
+	private void finishEditParty()
+	{
+		editing = false;
+		createTab.setText("Party");
+		if (partyState.isInParty())
+		{
+			rebuildTabs(true);
+			tabGroup.select(partyTab);
+		}
+		else
+		{
+			rebuildTabs(false);
+			tabGroup.select(searchTab);
+		}
+	}
+
+	/** Edit layout: Search | Party | Edit | Favorites (the create form stays available while hosting). */
+	private void rebuildTabsForEdit()
+	{
+		tabGroup.remove(searchTab);
+		tabGroup.remove(createTab);
+		tabGroup.remove(favesTab);
+		tabGroup.remove(partyTab);
+
+		tabGroup.add(searchTab);
+		tabGroup.add(partyTab);
+		tabGroup.add(createTab);
+		tabGroup.add(favesTab);
+
+		tabGroup.revalidate();
+		tabGroup.repaint();
 	}
 
 	/**
