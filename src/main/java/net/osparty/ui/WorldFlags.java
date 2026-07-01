@@ -15,19 +15,35 @@ final class WorldFlags
 {
 	private static final int SIZE = 16;
 	private static final Map<WorldRegion, ImageIcon> CACHE = new EnumMap<>(WorldRegion.class);
+	/** Shown for regions with no bundled flag, so every world still gets a uniform badge. */
+	private static final ImageIcon NEUTRAL = neutral();
 
 	private WorldFlags()
 	{
 	}
 
-	/** @return the flag for {@code region}, or null if unknown / not loadable. */
+	/** @return the flag for {@code region}, or a neutral placeholder if unknown / not loadable. */
 	static ImageIcon forRegion(WorldRegion region)
 	{
 		if (region == null)
 		{
-			return null;
+			return NEUTRAL;
 		}
-		return CACHE.computeIfAbsent(region, r -> load(resourceFor(r)));
+		return CACHE.computeIfAbsent(region, r -> {
+			ImageIcon icon = load(resourceFor(r));
+			return icon != null ? icon : NEUTRAL;
+		});
+	}
+
+	private static ImageIcon neutral()
+	{
+		BufferedImage img = new BufferedImage(SIZE, SIZE, BufferedImage.TYPE_INT_ARGB);
+		java.awt.Graphics2D g = img.createGraphics();
+		g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(new java.awt.Color(0x70, 0x70, 0x70));
+		g.fillRoundRect(2, 3, SIZE - 4, SIZE - 6, 4, 4);
+		g.dispose();
+		return new ImageIcon(img);
 	}
 
 	private static String resourceFor(WorldRegion region)

@@ -9,7 +9,6 @@ import net.osparty.model.Activity;
 import net.osparty.model.Party;
 import net.osparty.party.LiveParty;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -23,7 +22,6 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
-import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -109,7 +107,7 @@ class FriendsPanel extends PartyCardPanel
 		sections.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
 		// Friends section
-		JPanel friendsHeader = buildSectionHeader("Friends", new Color(0x56A0D3),
+		JPanel friendsHeader = buildSectionHeader("Friends",
 			() -> { friendsExpanded = !friendsExpanded; render(); });
 		friendsCount = (JLabel) friendsHeader.getClientProperty("count");
 		friendsCaret = (JLabel) friendsHeader.getClientProperty("caret");
@@ -120,7 +118,7 @@ class FriendsPanel extends PartyCardPanel
 		friendsContent.setAlignmentX(Component.LEFT_ALIGNMENT);
 
 		// Favorites section
-		JPanel favHeader = buildSectionHeader("Favorites", new Color(0xFF8C00),
+		JPanel favHeader = buildSectionHeader("Favorites",
 			() -> { favExpanded = !favExpanded; render(); });
 		favoritesCount = (JLabel) favHeader.getClientProperty("count");
 		favoritesCaret = (JLabel) favHeader.getClientProperty("caret");
@@ -177,16 +175,10 @@ class FriendsPanel extends PartyCardPanel
 		statusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		statusLabel.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
 
-		JButton refreshBtn = new JButton("↺");
-		refreshBtn.setFocusPainted(false);
-		refreshBtn.setToolTipText("Refresh now");
-		refreshBtn.addActionListener(e -> render());
-
 		JPanel bottom = new JPanel(new BorderLayout(4, 0));
 		bottom.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		bottom.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
 		bottom.add(statusLabel, BorderLayout.CENTER);
-		bottom.add(refreshBtn, BorderLayout.EAST);
 
 		add(scroll, BorderLayout.CENTER);
 		add(bottom, BorderLayout.SOUTH);
@@ -267,6 +259,8 @@ class FriendsPanel extends PartyCardPanel
 	{
 		applyButtons.clear();
 		partiesById.clear();
+		reasonLabels.clear();
+		rolePickers.clear();
 
 		Set<String> friends = friendNamesSupplier != null ? friendNamesSupplier.get() : null;
 
@@ -299,7 +293,7 @@ class FriendsPanel extends PartyCardPanel
 		friendParties.sort((a, b) -> Long.compare(b.getCreatedAt(), a.getCreatedAt()));
 
 		populateSection(favoritesContent, faves, favExpanded,
-			faves.isEmpty() ? "No open parties with favourited players." : null);
+			faves.isEmpty() ? "No open parties with favorited players." : null);
 		populateSection(friendsContent, friendParties, friendsExpanded,
 			friendParties.isEmpty() ? "No open parties from OSRS friends." : null);
 
@@ -309,9 +303,9 @@ class FriendsPanel extends PartyCardPanel
 		updateCaret(favoritesCaret, favExpanded);
 		updateCaret(friendsCaret, friendsExpanded);
 
+		// Counts live in the per-section badges; the status line only carries the empty state.
 		int total = faves.size() + friendParties.size();
-		setStatus(total == 0 ? "No matching parties right now." :
-			total + " open " + (total == 1 ? "party" : "parties") + " found.");
+		setStatus(total == 0 ? "No matching parties right now." : "");
 
 		updateAllButtons();
 	}
@@ -352,10 +346,10 @@ class FriendsPanel extends PartyCardPanel
 	 * Builds a collapsible section header. Stores the count badge label as a
 	 * client property keyed {@code "count"} so the caller can update it.
 	 */
-	private static JPanel buildSectionHeader(String title, Color titleColor, Runnable onToggle)
+	private static JPanel buildSectionHeader(String title, Runnable onToggle)
 	{
 		JPanel header = new JPanel(new BorderLayout(6, 0));
-		header.setBackground(new Color(0x3A3A3A));
+		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		header.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
 			BorderFactory.createEmptyBorder(5, 8, 5, 8)));
@@ -364,7 +358,7 @@ class FriendsPanel extends PartyCardPanel
 
 		JLabel titleLabel = new JLabel(title);
 		titleLabel.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.BOLD));
-		titleLabel.setForeground(titleColor);
+		titleLabel.setForeground(ColorScheme.BRAND_ORANGE);
 
 		JLabel countLabel = new JLabel("0");
 		countLabel.setFont(FontManager.getRunescapeSmallFont());

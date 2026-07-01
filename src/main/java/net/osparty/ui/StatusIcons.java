@@ -4,6 +4,7 @@ import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Image;
+import java.awt.Polygon;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import javax.swing.ImageIcon;
@@ -23,6 +24,12 @@ final class StatusIcons
 	static final ImageIcon FRIENDS_CHAT = loadFriendsChat();
 	static final ImageIcon ONLINE = new ImageIcon(dot(new Color(0x4C, 0xD1, 0x37)));
 	static final ImageIcon OFFLINE = new ImageIcon(dot(new Color(0xD1, 0x3A, 0x3A)));
+	static final ImageIcon COPY = new ImageIcon(copy());
+	static final ImageIcon RUNEWATCH = new ImageIcon(runewatch());
+	static final ImageIcon STAR_FILLED = new ImageIcon(star(true));
+	static final ImageIcon STAR_OUTLINE = new ImageIcon(star(false));
+	static final ImageIcon CROWN = loadCrown();
+	static final ImageIcon PLUS = new ImageIcon(plus());
 
 	private static final int SIZE = 14;
 
@@ -84,6 +91,102 @@ final class StatusIcons
 		hints(g);
 		g.setColor(color);
 		g.fillOval(3, 3, 8, 8);
+		g.dispose();
+		return img;
+	}
+
+	/** Two overlapping pages — the classic "copy to clipboard" glyph. OS-font independent. */
+	private static BufferedImage copy()
+	{
+		BufferedImage img = base();
+		Graphics2D g = img.createGraphics();
+		hints(g);
+		g.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		// back page
+		g.setColor(new Color(0xA0, 0xA0, 0xA0));
+		g.drawRoundRect(3, 2, 6, 8, 2, 2);
+		// front page: fill with the darker panel colour so the overlap reads, then outline
+		g.setColor(new Color(0x1E, 0x1E, 0x1E));
+		g.fillRoundRect(5, 4, 6, 8, 2, 2);
+		g.setColor(new Color(0xA0, 0xA0, 0xA0));
+		g.drawRoundRect(5, 4, 6, 8, 2, 2);
+		g.dispose();
+		return img;
+	}
+
+	/** Red warning triangle with a white exclamation — RuneWatch flag. */
+	private static BufferedImage runewatch()
+	{
+		BufferedImage img = base();
+		Graphics2D g = img.createGraphics();
+		hints(g);
+		Polygon tri = new Polygon(new int[]{7, 1, 13}, new int[]{1, 12, 12}, 3);
+		g.setColor(new Color(0xD1, 0x3A, 0x3A));
+		g.fillPolygon(tri);
+		g.setColor(Color.WHITE);
+		g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		g.drawLine(7, 5, 7, 9);
+		g.fillOval(6, 10, 2, 2);
+		g.dispose();
+		return img;
+	}
+
+	private static Polygon starPolygon()
+	{
+		Polygon p = new Polygon();
+		double cx = 7, cy = 7.3, outer = 6.2, inner = 2.6;
+		for (int i = 0; i < 10; i++)
+		{
+			double r = (i % 2 == 0) ? outer : inner;
+			double ang = -Math.PI / 2 + i * Math.PI / 5;
+			p.addPoint((int) Math.round(cx + r * Math.cos(ang)), (int) Math.round(cy + r * Math.sin(ang)));
+		}
+		return p;
+	}
+
+	/** A green plus glyph (the "add/save" button). */
+	private static BufferedImage plus()
+	{
+		BufferedImage img = base();
+		Graphics2D g = img.createGraphics();
+		hints(g);
+		g.setColor(new Color(0x4C, 0xD1, 0x37));
+		g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		g.drawLine(7, 3, 7, 11);
+		g.drawLine(3, 7, 11, 7);
+		g.dispose();
+		return img;
+	}
+
+	/** The real OSRS Jagex Moderator emblem (bundled PNG), used at its native pixel size. */
+	private static ImageIcon loadCrown()
+	{
+		try
+		{
+			return new ImageIcon(ImageUtil.loadImageResource(StatusIcons.class, "/net/osparty/icons/mod_crown.png"));
+		}
+		catch (Exception e)
+		{
+			return null;
+		}
+	}
+
+	private static BufferedImage star(boolean filled)
+	{
+		BufferedImage img = base();
+		Graphics2D g = img.createGraphics();
+		hints(g);
+		Polygon p = starPolygon();
+		g.setColor(new Color(0xF0, 0xC0, 0x00));
+		if (filled)
+		{
+			g.fillPolygon(p);
+		}
+		else
+		{
+			g.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g.drawPolygon(p);
+		}
 		g.dispose();
 		return img;
 	}

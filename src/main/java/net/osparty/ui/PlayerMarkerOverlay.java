@@ -102,7 +102,9 @@ public class PlayerMarkerOverlay extends Overlay
 		{
 			return;
 		}
-		graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), Math.min(60, color.getAlpha())));
+		int maxAlpha = Math.max(0, Math.min(255, config.markerTileMaxAlpha()));
+		graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
+			Math.min(maxAlpha, color.getAlpha())));
 		graphics.fill(tile);
 		graphics.setColor(color);
 		graphics.draw(tile);
@@ -116,7 +118,8 @@ public class PlayerMarkerOverlay extends Overlay
 			return;
 		}
 		String name = player.getName();
-		Point textLoc = player.getCanvasTextLocation(graphics, name, player.getLogicalHeight() + 40);
+		Point textLoc = player.getCanvasTextLocation(graphics, name,
+			player.getLogicalHeight() + config.markerNameOffset());
 		if (textLoc == null)
 		{
 			return;

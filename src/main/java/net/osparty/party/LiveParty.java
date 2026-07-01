@@ -465,6 +465,15 @@ public class LiveParty
 	 */
 	public void requestFriendsChat(long targetMemberId, String friendsChat)
 	{
+		sendJoinPrompt(targetMemberId, "FC", friendsChat);
+	}
+
+	/**
+	 * Host: send a member a join prompt. {@code kind} is "FC" (join the host's friends
+	 * chat — {@code friendsChat} required), "NOTICE_BOARD" (ToB) or "OBELISK" (ToA).
+	 */
+	public void sendJoinPrompt(long targetMemberId, String kind, String friendsChat)
+	{
 		if (!hosting)
 		{
 			return;
@@ -472,6 +481,7 @@ public class LiveParty
 		FcRequestMessage request = new FcRequestMessage();
 		request.setTargetMemberId(targetMemberId);
 		request.setHostName(hostName);
+		request.setKind(kind);
 		request.setFriendsChat(friendsChat);
 		partyService.send(request);
 	}

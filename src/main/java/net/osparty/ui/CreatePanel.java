@@ -17,6 +17,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Font;
 import java.awt.Insets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,6 +31,7 @@ import javax.swing.JOptionPane;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListCellRenderer;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -39,25 +41,34 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
-import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.event.AncestorEvent;
 import javax.swing.event.AncestorListener;
 import net.runelite.api.vars.AccountType;
+import net.osparty.KillcountService;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
+import java.awt.Rectangle;
+import java.util.function.IntSupplier;
+import javax.swing.Scrollable;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.DocumentFilter;
 
 /**
  * "Create" tab: a form to host a new party. On submit the logged in player is
  * recorded as the host and the party is pushed to the queue API; the player
- * then enters that party (managed on the "Current" tab). A player can only host
+ * then enters that party (managed on the "Party" tab). A player can only host
  * while not already in a party.
  */
-class CreatePanel extends JPanel
+class CreatePanel extends JPanel implements Scrollable
 {
+	private static final int DESC_MAX = 200;
+
 	private static final String KEY_LAST_PRESET = "lastPreset";
 	private static final String KEY_FAVOURITES = "favourites";
 
@@ -71,6 +82,9 @@ class CreatePanel extends JPanel
 	private final Supplier<String> coxLayoutSupplier;
 	private final ConfigManager configManager;
 	private final Gson gson;
+	private final KillcountService killcountService;
+	private final IntSupplier worldSupplier;
+	private final JLabel descCounter = new JLabel();
 
 	private final JComboBox<Activity> activityDropdown = new JComboBox<>(Activity.values());
 	/** The activity we're currently standing near (suggested at the top of the list). */
@@ -78,7 +92,6 @@ class CreatePanel extends JPanel
 	private boolean rebuildingDropdown;
 	private final JComboBox<LootRule> lootDropdown = new JComboBox<>(LootRule.values());
 	private final JSpinner capacitySpinner;
-	private final JTextField worldField = new JTextField();
 	private final JTextArea descriptionArea = new JTextArea(3, 0);
 	private final JCheckBox privateCheck = new JCheckBox("Private (join by code only)");
 	private final JCheckBox ironmanCheck = new JCheckBox("Ironman only");
@@ -93,6 +106,8 @@ class CreatePanel extends JPanel
 	private JPanel invocationRow;
 	private final JButton createButton = new JButton("Create party");
 	private final JLabel statusLabel = new JLabel();
+	private JPanel difficultyHeader;
+	private JPanel rolesHeader;
 
 	private final JComboBox<String> favouriteDropdown = new JComboBox<>();
 	private boolean rebuildingFavourites;
@@ -114,15 +129,17 @@ class CreatePanel extends JPanel
 
 	/** True while the form is editing an existing hosted party rather than creating one. */
 	private boolean editing;
-	/** Invoked after a successful edit so the owning panel can return to the Current tab. */
+	/** Invoked after a successful edit so the owning panel can return to the Party tab. */
 	private Runnable onEditDone;
 
 	CreatePanel(PartyService partyService, OSPartyConfig config, Supplier<String> playerNameSupplier,
 		PartyState partyState, LiveParty liveParty, Supplier<AccountType> accountTypeSupplier,
 		Supplier<int[]> mapRegionsSupplier, Supplier<String> coxLayoutSupplier, ConfigManager configManager,
-		Gson gson)
+		Gson gson, KillcountService killcountService, IntSupplier worldSupplier)
 	{
 		this.gson = gson;
+		this.killcountService = killcountService;
+		this.worldSupplier = worldSupplier;
 		this.partyService = partyService;
 		this.config = config;
 		this.playerNameSupplier = playerNameSupplier;
@@ -141,32 +158,86 @@ class CreatePanel extends JPanel
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 
 		add(buildFavourites());
+
+		// ---- Basics ----
+		add(sectionHeader("Basics"));
 		add(field("Activity", activityDropdown));
 		add(field("Party size", capacitySpinner));
 		add(field("Loot rule", lootDropdown));
-		add(field("Minimum KC", minKcSpinner));
-
-		hardKcField = field(hardKcLabel, hardKcSpinner);
-		add(hardKcField);
-
-		add(field("World (optional)", worldField));
 
 		descriptionArea.setLineWrap(true);
 		descriptionArea.setWrapStyleWord(true);
 		descriptionArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		descriptionArea.setForeground(Color.WHITE);
+		// Cap the description length and show a live used/limit counter (point 24).
+		((AbstractDocument) descriptionArea.getDocument()).setDocumentFilter(new DocumentFilter()
+		{
+			@Override
+			public void insertString(FilterBypass fb, int offset, String string, javax.swing.text.AttributeSet attr)
+				throws javax.swing.text.BadLocationException
+			{
+				replace(fb, offset, 0, string, attr);
+			}
+
+			@Override
+			public void replace(FilterBypass fb, int offset, int length, String text,
+				javax.swing.text.AttributeSet attr) throws javax.swing.text.BadLocationException
+			{
+				int room = DESC_MAX - (fb.getDocument().getLength() - length);
+				if (room <= 0)
+				{
+					return;
+				}
+				String ins = text != null && text.length() > room ? text.substring(0, room) : text;
+				super.replace(fb, offset, length, ins, attr);
+			}
+		});
 		add(field("Description (optional)", new JScrollPane(descriptionArea)));
 
+		descCounter.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		descCounter.setFont(FontManager.getRunescapeSmallFont());
+		descCounter.setAlignmentX(Component.LEFT_ALIGNMENT);
+		descriptionArea.getDocument().addDocumentListener(new DocumentListener()
+		{
+			@Override
+			public void insertUpdate(DocumentEvent e)
+			{
+				updateDescCounter();
+			}
+
+			@Override
+			public void removeUpdate(DocumentEvent e)
+			{
+				updateDescCounter();
+			}
+
+			@Override
+			public void changedUpdate(DocumentEvent e)
+			{
+				updateDescCounter();
+			}
+		});
+		updateDescCounter();
+		add(descCounter);
+
+		// ---- Requirements ----
+		add(sectionHeader("Requirements"));
+		add(field("Minimum KC", minKcSpinner));
+		hardKcField = field(hardKcLabel, hardKcSpinner);
+		add(hardKcField);
 		add(checkBoxRow(privateCheck));
 		add(checkBoxRow(ironmanCheck));
 
+		// ---- Difficulty ---- (header + rows hidden by applyActivityBounds when N/A)
+		difficultyHeader = sectionHeader("Difficulty");
+		add(difficultyHeader);
 		// Chambers of Xeric only: shown/hidden by applyActivityBounds.
 		includeLayoutRow = checkBoxRow(includeLayoutCheck);
 		includeLayoutRow.setVisible(false);
 		add(includeLayoutRow);
 
-		// Difficulty: a CM/HMT toggle (CoX/ToB) or an invocation level (ToA). Only the
-		// relevant control is shown, driven by applyActivityBounds.
+		// A CM/HMT toggle (CoX/ToB) or an invocation level (ToA). Only the relevant
+		// control is shown, driven by applyActivityBounds.
 		hardModeRow = checkBoxRow(hardModeCheck);
 		hardModeRow.setVisible(false);
 		add(hardModeRow);
@@ -176,14 +247,14 @@ class CreatePanel extends JPanel
 		add(invocationRow);
 
 		// Learner-raid tagging (raids only): ticking either Learner or Teacher marks
-		// the ad as a learner raid; neither leaves it a normal raid. Shown/hidden by
-		// applyActivityBounds.
+		// the ad as a learner raid; neither leaves it a normal raid.
 		learnerRow = buildLearnerRow();
 		learnerRow.setVisible(false);
 		add(learnerRow);
 
-		// Roles (ToB/CoX only): the host's own role plus a count per role for the
-		// team composition. Shown/hidden and rebuilt by applyActivityBounds.
+		// ---- Roles ---- (ToB/CoX only): the host's own role plus a count per role.
+		rolesHeader = sectionHeader("Roles");
+		add(rolesHeader);
 		rolesSection = buildRolesSection();
 		rolesSection.setVisible(false);
 		add(rolesSection);
@@ -210,15 +281,8 @@ class CreatePanel extends JPanel
 			}
 		});
 
-		// Only ironman accounts may host an ironman-only party - bounce the toggle
-		// (and explain) if a main tries to tick it.
-		ironmanCheck.addActionListener(e -> {
-			if (ironmanCheck.isSelected() && !AccountTypes.isIronman(accountTypeSupplier.get()))
-			{
-				ironmanCheck.setSelected(false);
-				setStatus("Only ironman accounts can host an ironman-only party.");
-			}
-		});
+		// Only ironman accounts may host an ironman-only party: the toggle is disabled
+		// for mains (see updateIronmanToggle), so there's nothing to bounce here.
 
 		createButton.setFocusPainted(false);
 		createButton.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -239,9 +303,6 @@ class CreatePanel extends JPanel
 		statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 		statusLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
 		add(statusLabel);
-
-		// Push the form to the top so fields keep their natural height.
-		add(Box.createVerticalGlue());
 
 		activityDropdown.setRenderer(new ActivityRenderer());
 		activityDropdown.addActionListener(e -> {
@@ -305,7 +366,8 @@ class CreatePanel extends JPanel
 	private void updateLoginState()
 	{
 		boolean loggedIn = playerNameSupplier.get() != null;
-		createButton.setEnabled(loggedIn && !creating);
+		updateIronmanToggle();
+		refreshValidation();
 		if (!loggedIn)
 		{
 			setStatus(LOGIN_HINT);
@@ -314,6 +376,67 @@ class CreatePanel extends JPanel
 		{
 			setStatus("");
 		}
+	}
+
+	/** Disable the ironman-only toggle for non-ironman accounts, with a why tooltip (point 21). */
+	private void updateIronmanToggle()
+	{
+		boolean iron = AccountTypes.isIronman(accountTypeSupplier.get());
+		ironmanCheck.setEnabled(iron);
+		if (!iron)
+		{
+			ironmanCheck.setSelected(false);
+			ironmanCheck.setToolTipText("Only ironman accounts can host an ironman-only party.");
+		}
+		else
+		{
+			ironmanCheck.setToolTipText(null);
+		}
+	}
+
+	/** Whether the form may be submitted: a valid role composition for role activities. */
+	private boolean isFormValid()
+	{
+		Activity activity = (Activity) activityDropdown.getSelectedItem();
+		if (activity == null)
+		{
+			return false;
+		}
+		if (activity.hasRoles())
+		{
+			// Mirror create()'s check exactly. captureRequiredRoles already returns the
+			// fixed composition for ToB (always sized to capacity) and the spinner-built
+			// composition for CoX — don't use assignedRoleTotal(), which is 0 for ToB.
+			int capacity = (Integer) capacitySpinner.getValue();
+			List<String> req = captureRequiredRoles(activity, capacity);
+			int assigned = req == null ? 0 : req.size();
+			if (assigned != capacity)
+			{
+				return false;
+			}
+			Role mine = (Role) myRoleDropdown.getSelectedItem();
+			String hostRole = mine != null ? mine.getId() : null;
+			if (hostRole == null || !req.contains(hostRole))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Enable/disable Create live based on validity (point 18); the role total label shows why. */
+	private void refreshValidation()
+	{
+		boolean loggedIn = playerNameSupplier.get() != null;
+		createButton.setEnabled(loggedIn && !creating && isFormValid());
+	}
+
+	private void updateDescCounter()
+	{
+		int len = descriptionArea.getDocument().getLength();
+		descCounter.setText(len + "/" + DESC_MAX);
+		descCounter.setForeground(len >= DESC_MAX
+			? ColorScheme.PROGRESS_ERROR_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 	}
 
 	/**
@@ -525,6 +648,13 @@ class CreatePanel extends JPanel
 			rebuildRoles(activity);
 		}
 
+		// Hide a section header when none of its rows apply to this activity.
+		boolean anyDifficulty = includeLayoutRow.isVisible() || hardModeRow.isVisible()
+			|| invocationRow.isVisible() || learnerRow.isVisible();
+		difficultyHeader.setVisible(anyDifficulty);
+		rolesHeader.setVisible(hasRoles);
+
+		refreshValidation();
 		revalidate();
 		repaint();
 	}
@@ -693,6 +823,7 @@ class CreatePanel extends JPanel
 		roleTotalLabel.setText("Roles assigned: " + total + " / " + capacity);
 		roleTotalLabel.setForeground(total == capacity
 			? ColorScheme.LIGHT_GRAY_COLOR : ColorScheme.PROGRESS_ERROR_COLOR);
+		refreshValidation();
 	}
 
 	/** "1 Melee, 1 Ranged, 2 Mage" from a role multiset (first-seen order). */
@@ -772,7 +903,9 @@ class CreatePanel extends JPanel
 		int capacity = (Integer) capacitySpinner.getValue();
 		String activityId = activity.getId();
 		String description = descriptionArea.getText().trim();
-		String world = worldField.getText().trim();
+		// World is always the host's live world (no manual field — point 22).
+		int hostWorld = worldSupplier != null ? worldSupplier.getAsInt() : 0;
+		String world = hostWorld > 0 ? Integer.toString(hostWorld) : "";
 		int minKc = (Integer) minKcSpinner.getValue();
 
 		LootRule loot = (LootRule) lootDropdown.getSelectedItem();
@@ -786,6 +919,27 @@ class CreatePanel extends JPanel
 		{
 			setStatus("Only ironman accounts can host an ironman-only party.");
 			return;
+		}
+
+		// A host must meet the killcount requirement they set (point 18). Block only when
+		// we know they're below; if not yet looked up, kick off a lookup and allow.
+		if ((minKc > 0 || minHardKc > 0) && killcountService != null)
+		{
+			KillcountService.Killcount kc = killcountService.cached(player, activity);
+			if (kc == null)
+			{
+				killcountService.lookup(player, activity, this::refreshValidation);
+			}
+			else
+			{
+				boolean below = (minKc > 0 && kc.killCount >= 0 && kc.killCount < minKc)
+					|| (minHardKc > 0 && kc.hardModeKillCount >= 0 && kc.hardModeKillCount < minHardKc);
+				if (below)
+				{
+					setStatus("You don't meet the minimum KC you set — you must meet it yourself.");
+					return;
+				}
+			}
 		}
 
 		// Chambers of Xeric: advertise the live raid layout (sent via heartbeat once
@@ -816,7 +970,7 @@ class CreatePanel extends JPanel
 
 		creating = true;
 		createButton.setEnabled(false);
-		setStatus("Creating party...");
+		setStatus("Creating party…");
 
 		final String advertisedDescription = description;
 		// A secret that authorises host-only changes to this ad: sent on create (the
@@ -837,7 +991,7 @@ class CreatePanel extends JPanel
 				error -> SwingUtilities.invokeLater(() -> {
 					creating = false;
 					createButton.setEnabled(true);
-					setStatus("Create failed: " + error.getMessage());
+					setStatus("Create failed — " + net.osparty.api.PartyErrors.friendly(error));
 				}));
 		});
 	}
@@ -848,21 +1002,44 @@ class CreatePanel extends JPanel
 		creating = false;
 		createButton.setEnabled(true);
 		descriptionArea.setText("");
-		// Remember whether to advertise the live CoX layout, so the Current tab's
+		// Remember whether to advertise the live CoX layout, so the Party tab's
 		// heartbeat knows to include it once the host is inside the raid.
 		partyState.setAdvertiseLayout(advertiseLayout);
 		// Host the live room now that the ad is up; applicants who join are pending
-		// until admitted from the Current tab.
+		// until admitted from the Party tab.
 		liveParty.hostParty(passphrase, host, party.getActivity(), capacity, false, hostRole, hostLearner, hostTeacher);
 		if (party.isPrivateParty() && party.getInviteCode() != null)
 		{
-			setStatus("Private party created - invite code " + party.getInviteCode() + " (also on Current tab).");
+			setStatus("Private party created — invite code " + party.getInviteCode() + " (also on the Party tab).");
 		}
 		else
 		{
-			setStatus("Party created - manage it on the Current tab.");
+			setStatus("Party created — manage it on the Party tab.");
 		}
 		partyState.setHosting(party, hostKey);
+	}
+
+	/** A bold section divider in the Create form (Basics / Requirements / Difficulty / Roles). */
+	private JPanel sectionHeader(String text)
+	{
+		JPanel row = new JPanel(new BorderLayout())
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+		row.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(8, 0, 3, 0)));
+		JLabel label = new JLabel(text);
+		label.setForeground(ColorScheme.BRAND_ORANGE);
+		label.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.BOLD));
+		row.add(label, BorderLayout.WEST);
+		return row;
 	}
 
 	/** The host's validated role composition + own role for the current form. */
@@ -901,7 +1078,7 @@ class CreatePanel extends JPanel
 		if (hostRole == null || !requiredRoles.contains(hostRole))
 		{
 			setStatus("Add at least one " + (mine != null ? mine.getDisplayName() : "of your role")
-				+ " slot - that's the role you'll fill.");
+				+ " slot — that's the role you'll fill.");
 			return null;
 		}
 		return new RoleSelection(requiredRoles, hostRole);
@@ -909,7 +1086,7 @@ class CreatePanel extends JPanel
 
 	// ---- edit an existing hosted party ---------------------------------------
 
-	/** Called by the owning panel to return to the Current tab after a successful save. */
+	/** Called by the owning panel to return to the Party tab after a successful save. */
 	void setOnEditDone(Runnable onEditDone)
 	{
 		this.onEditDone = onEditDone;
@@ -930,7 +1107,7 @@ class CreatePanel extends JPanel
 		activityDropdown.setEnabled(false);
 		createButton.setText("Save changes");
 		createButton.setEnabled(true);
-		setStatus("Editing your party - the activity can't be changed.");
+		setStatus("Editing your party — the activity can't be changed.");
 	}
 
 	/** Leave edit mode and restore the create form (defaults / last preset). */
@@ -1000,7 +1177,9 @@ class CreatePanel extends JPanel
 
 		int minHardKc = activity.hasHardMode() ? (Integer) hardKcSpinner.getValue() : 0;
 		String description = descriptionArea.getText().trim();
-		String world = worldField.getText().trim();
+		// World is always the host's live world (the manual field was removed).
+		int hostWorld = worldSupplier != null ? worldSupplier.getAsInt() : 0;
+		String world = hostWorld > 0 ? Integer.toString(hostWorld) : "";
 		int minKc = (Integer) minKcSpinner.getValue();
 		LootRule loot = (LootRule) lootDropdown.getSelectedItem();
 		String lootRule = (loot == null ? LootRule.UNSPECIFIED : loot).name();
@@ -1033,12 +1212,12 @@ class CreatePanel extends JPanel
 			learner, teacher);
 
 		createButton.setEnabled(false);
-		setStatus("Saving changes...");
+		setStatus("Saving changes…");
 		partyService.editParty(party.getId(), partyState.getHostKey(), edit,
 			ignored -> SwingUtilities.invokeLater(() -> onEdited(party, edit, advertiseLayout)),
 			error -> SwingUtilities.invokeLater(() -> {
 				createButton.setEnabled(true);
-				setStatus("Edit failed: " + error.getMessage());
+				setStatus("Edit failed — " + net.osparty.api.PartyErrors.friendly(error));
 			}));
 	}
 
@@ -1047,7 +1226,7 @@ class CreatePanel extends JPanel
 	{
 		createButton.setEnabled(true);
 
-		// Reflect the edit on our local hosted-party copy so the Current tab updates at once
+		// Reflect the edit on our local hosted-party copy so the Party tab updates at once
 		// (the server's own 'updated' broadcast only refreshes the search list).
 		party.setDescription(edit.getDescription());
 		party.setCapacity(edit.getCapacity());
@@ -1087,9 +1266,41 @@ class CreatePanel extends JPanel
 		statusLabel.setText(text);
 	}
 
+	// ---- Scrollable: track the viewport width so fields fill it, and scroll vertically (point 17) ----
+
+	@Override
+	public Dimension getPreferredScrollableViewportSize()
+	{
+		return getPreferredSize();
+	}
+
+	@Override
+	public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+	{
+		return 16;
+	}
+
+	@Override
+	public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+	{
+		return visibleRect.height;
+	}
+
+	@Override
+	public boolean getScrollableTracksViewportWidth()
+	{
+		return true;
+	}
+
+	@Override
+	public boolean getScrollableTracksViewportHeight()
+	{
+		return false;
+	}
+
 	// ---- favourites / presets ------------------------------------------------
 
-	private static final String FAV_PLACEHOLDER = "Favourites...";
+	private static final String FAV_PLACEHOLDER = "Presets…";
 
 	private JPanel buildFavourites()
 	{
@@ -1119,16 +1330,14 @@ class CreatePanel extends JPanel
 			if (idx - 1 < favourites.size())
 			{
 				applyPreset(favourites.get(idx - 1));
-				setStatus("Loaded favourite \"" + favourites.get(idx - 1).getName() + "\".");
+				setStatus("Loaded preset \"" + favourites.get(idx - 1).getName() + "\".");
 			}
 		});
 
-		JButton save = miniButton("+");
-		save.setToolTipText("Save the current settings as a favourite");
+		JButton save = miniButton(StatusIcons.PLUS, "Save the current settings as a preset");
 		save.addActionListener(e -> saveCurrentAsFavourite());
 
-		JButton remove = miniButton("X");
-		remove.setToolTipText("Remove the selected favourite");
+		JButton remove = miniButton(StatusIcons.CROSS, "Remove the selected preset");
 		remove.addActionListener(e -> removeSelectedFavourite());
 
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
@@ -1142,11 +1351,12 @@ class CreatePanel extends JPanel
 		return panel;
 	}
 
-	private JButton miniButton(String text)
+	private JButton miniButton(ImageIcon icon, String tooltip)
 	{
-		JButton button = new JButton(text);
+		JButton button = new JButton(icon);
 		button.setFocusPainted(false);
-		button.setMargin(new Insets(0, 6, 0, 6));
+		button.setMargin(new Insets(2, 6, 2, 6));
+		button.setToolTipText(tooltip);
 		return button;
 	}
 
@@ -1165,7 +1375,7 @@ class CreatePanel extends JPanel
 
 	private void saveCurrentAsFavourite()
 	{
-		String name = JOptionPane.showInputDialog(this, "Favourite name:", "Save favourite",
+		String name = JOptionPane.showInputDialog(this, "Preset name:", "Save preset",
 			JOptionPane.PLAIN_MESSAGE);
 		if (name == null)
 		{
@@ -1174,7 +1384,7 @@ class CreatePanel extends JPanel
 		name = name.trim();
 		if (name.isEmpty() || FAV_PLACEHOLDER.equals(name))
 		{
-			setStatus("Enter a name for the favourite.");
+			setStatus("Enter a name for the preset.");
 			return;
 		}
 		List<PartyPreset> favourites = loadFavourites();
@@ -1184,7 +1394,7 @@ class CreatePanel extends JPanel
 		saveFavourites(favourites);
 		rebuildFavourites();
 		favouriteDropdown.setSelectedItem(chosen);
-		setStatus("Saved favourite \"" + chosen + "\".");
+		setStatus("Saved preset \"" + chosen + "\".");
 	}
 
 	private void removeSelectedFavourite()
@@ -1192,7 +1402,7 @@ class CreatePanel extends JPanel
 		int idx = favouriteDropdown.getSelectedIndex();
 		if (idx <= 0)
 		{
-			setStatus("Select a favourite to remove.");
+			setStatus("Select a preset to remove.");
 			return;
 		}
 		List<PartyPreset> favourites = loadFavourites();
@@ -1201,7 +1411,7 @@ class CreatePanel extends JPanel
 			String removed = favourites.remove(idx - 1).getName();
 			saveFavourites(favourites);
 			rebuildFavourites();
-			setStatus("Removed favourite \"" + removed + "\".");
+			setStatus("Removed preset \"" + removed + "\".");
 		}
 	}
 
@@ -1217,7 +1427,6 @@ class CreatePanel extends JPanel
 		preset.setLootRule((loot == null ? LootRule.UNSPECIFIED : loot).name());
 		preset.setMinKc((Integer) minKcSpinner.getValue());
 		preset.setHardKc((Integer) hardKcSpinner.getValue());
-		preset.setWorld(worldField.getText().trim());
 		preset.setDescription(descriptionArea.getText());
 		preset.setPrivateParty(privateCheck.isSelected());
 		preset.setIronmanOnly(ironmanCheck.isSelected());
@@ -1260,7 +1469,6 @@ class CreatePanel extends JPanel
 		lootDropdown.setSelectedItem(LootRule.fromName(preset.getLootRule()));
 		minKcSpinner.setValue(Math.max(0, preset.getMinKc()));
 		hardKcSpinner.setValue(Math.max(0, preset.getHardKc()));
-		worldField.setText(preset.getWorld() != null ? preset.getWorld() : "");
 		descriptionArea.setText(preset.getDescription() != null ? preset.getDescription() : "");
 		privateCheck.setSelected(preset.isPrivateParty());
 		// Honour the ironman-only rule even if the saved preset had it ticked.

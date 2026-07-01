@@ -15,25 +15,43 @@ public interface OSPartyConfig extends Config
 	String GROUP = "osparty";
 
 	@ConfigSection(
+		name = "General",
+		description = "Core OSParty settings.",
+		position = 1,
+		closedByDefault = true
+	)
+	String GENERAL = "general";
+
+	@ConfigSection(
 		name = "Defence tracker",
 		description = "Show the live defence of a monster the party is draining with special attacks.",
-		position = 13
+		position = 13,
+		closedByDefault = true
 	)
 	String DEFENCE = "defence";
 
 	@ConfigSection(
-		name = "Meme mode",
-		description = "Optional sound effects for party events. All off by default.",
+		name = "Event sounds",
+		description = "Optional sound effects for party events (ready checks, kicks, friends-chat requests). All off by default.",
 		position = 14,
 		closedByDefault = true
 	)
 	String MEME_MODE = "memeMode";
 
+	@ConfigSection(
+		name = "Scene overlays",
+		description = "Tile pings, learner/teacher markers and defence text drawn on the game scene.",
+		position = 15,
+		closedByDefault = true
+	)
+	String SCENE = "scene";
+
 	@ConfigItem(
 		keyName = "defaultCapacity",
 		name = "Default party size",
 		description = "Capacity pre-filled in the create-party form.",
-		position = 2
+		position = 1,
+		section = GENERAL
 	)
 	default int defaultCapacity()
 	{
@@ -44,7 +62,8 @@ public interface OSPartyConfig extends Config
 		keyName = "runeWatch",
 		name = "RuneWatch warnings",
 		description = "Warn when a party member or applicant is on the RuneWatch / We Do Raids scammer watchlist.",
-		position = 3
+		position = 2,
+		section = GENERAL
 	)
 	default boolean runeWatch()
 	{
@@ -55,7 +74,8 @@ public interface OSPartyConfig extends Config
 		keyName = "inGamePrompts",
 		name = "In-game join prompts",
 		description = "As a host, show Accept/Decline for new applicants in the in-game chatbox (not just the side panel).",
-		position = 4
+		position = 3,
+		section = GENERAL
 	)
 	default boolean inGamePrompts()
 	{
@@ -66,7 +86,8 @@ public interface OSPartyConfig extends Config
 		keyName = "receiveFriendsChatRequests",
 		name = "Friends-chat join requests",
 		description = "Allow party hosts to ask you (via an on-screen popup) to join their friends chat. Turn off to ignore these requests.",
-		position = 5
+		position = 4,
+		section = GENERAL
 	)
 	default boolean receiveFriendsChatRequests()
 	{
@@ -77,7 +98,8 @@ public interface OSPartyConfig extends Config
 		keyName = "pings",
 		name = "Map pings",
 		description = "Show party members' tile pings on screen, and let you ping tiles for the party to see.",
-		position = 6
+		position = 5,
+		section = GENERAL
 	)
 	default boolean pings()
 	{
@@ -88,7 +110,8 @@ public interface OSPartyConfig extends Config
 		keyName = "pingHotkey",
 		name = "Ping hotkey",
 		description = "Hold this key and left-click a tile to ping it for the whole party.",
-		position = 7
+		position = 6,
+		section = GENERAL
 	)
 	default Keybind pingHotkey()
 	{
@@ -100,7 +123,8 @@ public interface OSPartyConfig extends Config
 		keyName = "pingColor",
 		name = "Your ping colour",
 		description = "Colour your own tile pings appear in (and the name label) for everyone in the party.",
-		position = 8
+		position = 7,
+		section = GENERAL
 	)
 	default Color pingColor()
 	{
@@ -111,7 +135,8 @@ public interface OSPartyConfig extends Config
 		keyName = "learnerTeacherIcons",
 		name = "Learner/teacher name icons",
 		description = "Show an icon by the name of party members tagged as a learner or teacher. Untagged members get nothing.",
-		position = 9
+		position = 8,
+		section = GENERAL
 	)
 	default boolean learnerTeacherIcons()
 	{
@@ -122,7 +147,8 @@ public interface OSPartyConfig extends Config
 		keyName = "learnerTeacherTiles",
 		name = "Learner/teacher tile markers",
 		description = "Highlight the tile of party members tagged as a learner or teacher. Untagged members get nothing.",
-		position = 10
+		position = 9,
+		section = GENERAL
 	)
 	default boolean learnerTeacherTiles()
 	{
@@ -134,7 +160,8 @@ public interface OSPartyConfig extends Config
 		keyName = "teacherColor",
 		name = "Teacher colour",
 		description = "Colour of the teacher tile marker.",
-		position = 11
+		position = 10,
+		section = GENERAL
 	)
 	default Color teacherColor()
 	{
@@ -146,11 +173,36 @@ public interface OSPartyConfig extends Config
 		keyName = "learnerColor",
 		name = "Learner colour",
 		description = "Colour of the learner tile marker.",
-		position = 12
+		position = 11,
+		section = GENERAL
 	)
 	default Color learnerColor()
 	{
 		return new Color(80, 200, 255);
+	}
+
+	@ConfigItem(
+		keyName = "skipDisbandConfirm",
+		name = "Skip disband confirmation",
+		description = "Don't ask for confirmation before disbanding a party you host.",
+		position = 12,
+		section = GENERAL
+	)
+	default boolean skipDisbandConfirm()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "chatboxNotifications",
+		name = "Chatbox notifications",
+		description = "Post OSParty event messages (applicant pings, friends-chat requests, ready checks, etc.) to your in-game chatbox.",
+		position = 13,
+		section = GENERAL
+	)
+	default boolean chatboxNotifications()
+	{
+		return true;
 	}
 
 	@ConfigItem(
@@ -253,6 +305,30 @@ public interface OSPartyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "defenceFontSize",
+		name = "Scene text size",
+		description = "Font size for the on-scene defence display.",
+		position = 9,
+		section = DEFENCE
+	)
+	default SceneFontSize defenceFontSize()
+	{
+		return SceneFontSize.SMALL;
+	}
+
+	@ConfigItem(
+		keyName = "defenceTextPlate",
+		name = "Scene text background",
+		description = "Draw a translucent plate behind the scene defence text for legibility.",
+		position = 10,
+		section = DEFENCE
+	)
+	default boolean defenceTextPlate()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "readyCheckSound",
 		name = "Ready-check sounds",
 		description = "Play sounds for ready checks (when one starts, and when everyone is ready).",
@@ -286,5 +362,53 @@ public interface OSPartyConfig extends Config
 	default boolean friendsChatRequestSound()
 	{
 		return false;
+	}
+
+	@ConfigItem(
+		keyName = "applicantOverlayMax",
+		name = "Max applicants shown",
+		description = "Maximum applicants listed in the in-game applicant overlay before a \"+N more\" line.",
+		position = 1,
+		section = SCENE
+	)
+	default int applicantOverlayMax()
+	{
+		return 5;
+	}
+
+	@ConfigItem(
+		keyName = "markerTileMaxAlpha",
+		name = "Marker tile fill opacity",
+		description = "Maximum opacity (0-255) of the learner/teacher tile fill. The configured colour's own alpha still applies if lower.",
+		position = 2,
+		section = SCENE
+	)
+	default int markerTileMaxAlpha()
+	{
+		return 60;
+	}
+
+	@ConfigItem(
+		keyName = "pingAnimMs",
+		name = "Ping duration (ms)",
+		description = "How long a map ping animates and stays visible.",
+		position = 3,
+		section = SCENE
+	)
+	default int pingAnimMs()
+	{
+		return 2000;
+	}
+
+	@ConfigItem(
+		keyName = "markerNameOffset",
+		name = "Marker icon height offset",
+		description = "Vertical offset of the learner/teacher icon above a member's overhead name.",
+		position = 4,
+		section = SCENE
+	)
+	default int markerNameOffset()
+	{
+		return 40;
 	}
 }

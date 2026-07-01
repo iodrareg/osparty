@@ -19,6 +19,7 @@ import java.awt.Cursor;
 import java.awt.Font;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LayoutManager;
@@ -119,6 +120,9 @@ class SearchPanel extends PartyCardPanel
 	private final ConfigManager configManager;
 
 	private final JPanel activityListPanel = new JPanel();
+	private boolean activitiesExpanded;
+	private final JButton activitiesToggle = new JButton();
+	private final JPanel activityContent = new JPanel();
 	private final Set<Activity> selectedActivities = EnumSet.noneOf(Activity.class);
 	private final Set<Role> selectedRoles = EnumSet.noneOf(Role.class);
 	private boolean rolesExpanded;
@@ -132,6 +136,10 @@ class SearchPanel extends PartyCardPanel
 	private boolean regionsExpanded;
 	private final JButton regionToggle = new JButton();
 	private final JPanel regionContent = new JPanel();
+	/** Outer "Filters" disclosure that wraps every filter section (point 8). */
+	private boolean filtersExpanded;
+	private final JButton filtersToggle = new JButton();
+	private final JPanel filtersContent = new JPanel();
 	/** Self-mark (not a role): tags us as a learner to the host when we apply. */
 	private final JCheckBox imLearnerCheck = new JCheckBox("I'm a learner");
 	private Activity recommended;
@@ -152,9 +160,13 @@ class SearchPanel extends PartyCardPanel
 	private final JButton resetButton = new JButton("Reset");
 	private final JTextField codeField = new JTextField();
 	private final JButton joinButton = new JButton("Join");
-	private final JButton searchButton = new JButton("Refresh");
 	private final JLabel statusLabel = new JLabel();
 	private final JPanel resultsPanel = new JPanel();
+	/** Results scroll vs the offline message + Reconnect button (point 52). */
+	private JScrollPane scroll;
+	private final JButton reconnectButton = new JButton("Reconnect");
+	private JPanel disconnectedPanel;
+	private boolean showingDisconnected;
 
 	private List<Party> lastResults;
 	private String renderedSignature;
@@ -188,11 +200,8 @@ class SearchPanel extends PartyCardPanel
 		JPanel north = new JPanel();
 		north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
 		north.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		north.add(buildActivityFilter());
-		north.add(buildRoleFilter());
-		north.add(buildTextFilter());
-		north.add(buildRegionFilter());
-		north.add(buildControls());
+		north.add(buildFiltersSection());
+		north.add(buildControlsBar());
 		north.add(buildJoinByCode());
 		add(north, BorderLayout.NORTH);
 
@@ -206,7 +215,7 @@ class SearchPanel extends PartyCardPanel
 		resultsWrap.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		resultsWrap.add(resultsPanel, BorderLayout.NORTH);
 
-		JScrollPane scroll = new JScrollPane(resultsWrap,
+		scroll = new JScrollPane(resultsWrap,
 			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
 			JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
 		scroll.setBorder(BorderFactory.createEmptyBorder());
@@ -258,7 +267,7 @@ class SearchPanel extends PartyCardPanel
 			}
 		});
 
-		// React to party changes made elsewhere (e.g. leaving from the Current tab).
+		// React to party changes made elsewhere (e.g. leaving from the Party tab).
 		partyState.addListener(() -> {
 			updateAllButtons();
 			maybeStartTimer();
@@ -270,28 +279,76 @@ class SearchPanel extends PartyCardPanel
 			if (isShowing())
 			{
 				updateAllButtons();
+				updateConnectionView();
 			}
 		}).start();
 
 		updateJoinButton();
 	}
 
-	private JPanel buildControls()
+	/**
+	 * Wraps every filter section (Activities, Roles, Search, Regions, Sort) in one
+	 * collapsible "Filters" disclosure so the results list dominates the tab. Default
+	 * collapsed; the header shows the active-filter count.
+	 */
+	private JPanel buildFiltersSection()
 	{
-		JPanel controls = cappedRow(new BorderLayout(0, 6));
-		controls.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+		JPanel panel = cappedRow(new BorderLayout(0, 4));
 
-		// Sort row
+		styleCollapsibleHeader(filtersToggle);
+		filtersToggle.addActionListener(e -> setFiltersExpanded(!filtersExpanded));
+		panel.add(filtersToggle, BorderLayout.NORTH);
+
+		filtersContent.setLayout(new BoxLayout(filtersContent, BoxLayout.Y_AXIS));
+		filtersContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		filtersContent.setAlignmentX(Component.LEFT_ALIGNMENT);
+		filtersContent.add(buildActivityFilter());
+		filtersContent.add(buildRoleFilter());
+		filtersContent.add(buildRegionFilter());
+		filtersContent.add(buildTextFilter());
+		filtersContent.add(buildSortRow());
+		filtersContent.setVisible(filtersExpanded);
+		panel.add(filtersContent, BorderLayout.CENTER);
+
+		updateFiltersToggleText();
+		return panel;
+	}
+
+	private void setFiltersExpanded(boolean expanded)
+	{
+		filtersExpanded = expanded;
+		filtersContent.setVisible(expanded);
+		updateFiltersToggleText();
+		persistFilters();
+		revalidate();
+		repaint();
+	}
+
+	private void updateFiltersToggleText()
+	{
+		filtersToggle.setIcon(filtersExpanded ? CARET_EXPANDED : CARET_COLLAPSED);
+		int active = countActiveFilters();
+		filtersToggle.setText(active == 0 ? "Filters" : "Filters (" + active + ")");
+	}
+
+	private JPanel buildSortRow()
+	{
 		JPanel sortRow = cappedRow(new BorderLayout(4, 0));
+		sortRow.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 		JLabel sortLabel = new JLabel("Sort");
 		sortLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		sortLabel.setFont(FontManager.getRunescapeSmallFont());
 		sortComboBox.addActionListener(e -> filtersChanged());
 		sortRow.add(sortLabel, BorderLayout.WEST);
 		sortRow.add(sortComboBox, BorderLayout.CENTER);
+		return sortRow;
+	}
 
-		// Bottom row: active-filters badge + reset + refresh button
+	/** Active-filters badge + Reset, kept outside the Filters disclosure so it stays visible when collapsed. */
+	private JPanel buildControlsBar()
+	{
 		JPanel bottomRow = cappedRow(new BorderLayout(4, 0));
+		bottomRow.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 		activeFiltersLabel.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
 		activeFiltersLabel.setFont(FontManager.getRunescapeSmallFont());
 		resetButton.setFocusPainted(false);
@@ -304,42 +361,20 @@ class SearchPanel extends PartyCardPanel
 		badgePanel.add(activeFiltersLabel);
 		badgePanel.add(resetButton);
 
-		searchButton.setFocusPainted(false);
-		searchButton.setToolTipText("Refresh the list of open parties");
-		searchButton.addActionListener(e -> renderCurrent());
-
 		bottomRow.add(badgePanel, BorderLayout.WEST);
-		bottomRow.add(searchButton, BorderLayout.EAST);
-
-		controls.add(sortRow, BorderLayout.NORTH);
-		controls.add(bottomRow, BorderLayout.CENTER);
-		return controls;
+		return bottomRow;
 	}
 
-	/** The activity multiselect: a checkbox per activity (all checked by default). */
+	/** The activity multiselect: a collapsible section with a checkbox per activity. */
 	private JPanel buildActivityFilter()
 	{
 		JPanel panel = cappedRow(new BorderLayout(0, 4));
+		panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
-		JPanel header = new JPanel(new BorderLayout());
-		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-		JLabel label = new JLabel("Activities");
-		label.setForeground(ColorScheme.BRAND_ORANGE);
-		label.setFont(label.getFont().deriveFont(Font.BOLD));
-		header.add(label, BorderLayout.WEST);
-
-		JPanel toggles = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-		toggles.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		JButton all = miniButton("All");
-		all.addActionListener(e -> setAllActivities(true));
-		JButton none = miniButton("None");
-		none.addActionListener(e -> setAllActivities(false));
-		toggles.add(all);
-		toggles.add(none);
-		header.add(toggles, BorderLayout.EAST);
-
-		panel.add(header, BorderLayout.NORTH);
+		styleCollapsibleHeader(activitiesToggle);
+		updateActivitiesToggleText();
+		activitiesToggle.addActionListener(e -> setActivitiesExpanded(!activitiesExpanded));
+		panel.add(activitiesToggle, BorderLayout.NORTH);
 
 		activityListPanel.setLayout(new BoxLayout(activityListPanel, BoxLayout.Y_AXIS));
 		activityListPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -351,8 +386,30 @@ class SearchPanel extends PartyCardPanel
 		scroll.getVerticalScrollBar().setUnitIncrement(16);
 		// Show ~6 rows; the rest scroll.
 		scroll.setPreferredSize(new Dimension(10, 170));
-		panel.add(scroll, BorderLayout.CENTER);
+
+		activityContent.setLayout(new BorderLayout());
+		activityContent.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		activityContent.add(scroll);
+		activityContent.setVisible(activitiesExpanded);
+		panel.add(activityContent, BorderLayout.CENTER);
 		return panel;
+	}
+
+	private void setActivitiesExpanded(boolean expanded)
+	{
+		activitiesExpanded = expanded;
+		activityContent.setVisible(expanded);
+		updateActivitiesToggleText();
+		persistFilters();
+		revalidate();
+		repaint();
+	}
+
+	private void updateActivitiesToggleText()
+	{
+		activitiesToggle.setIcon(activitiesExpanded ? CARET_EXPANDED : CARET_COLLAPSED);
+		int n = selectedActivities.size();
+		activitiesToggle.setText(n == 0 ? "Activities" : "Activities (" + n + ")");
 	}
 
 	/** RuneLite's config-section caret (grey), pointing right when collapsed / down when expanded. */
@@ -704,13 +761,6 @@ class SearchPanel extends PartyCardPanel
 			check.setFocusPainted(false);
 			check.setMargin(new Insets(0, 0, 0, 0));
 			check.setIconTextGap(2);
-			ImageIcon flag = WorldFlags.forRegion(region);
-			if (flag != null)
-			{
-				// Bright flag = region included; dimmed flag = region filtered out.
-				check.setSelectedIcon(flag);
-				check.setIcon(dimIcon(flag));
-			}
 			check.addActionListener(e -> {
 				if (check.isSelected())
 				{
@@ -724,7 +774,17 @@ class SearchPanel extends PartyCardPanel
 				filtersChanged();
 			});
 			regionCheckboxes.put(region, check);
-			grid.add(check);
+
+			// Flag is a separate always-bright label; the checkbox carries the on/off state.
+			ImageIcon flag = WorldFlags.forRegion(region);
+			JPanel cell = new JPanel(new BorderLayout(4, 0));
+			cell.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			if (flag != null)
+			{
+				cell.add(new JLabel(flag), BorderLayout.WEST);
+			}
+			cell.add(check, BorderLayout.CENTER);
+			grid.add(cell);
 		}
 
 		regionContent.setLayout(new BorderLayout());
@@ -761,25 +821,6 @@ class SearchPanel extends PartyCardPanel
 			: "Regions (" + (KNOWN_REGIONS.length - deselected) + "/" + KNOWN_REGIONS.length + ")");
 	}
 
-	/**
-	 * Produce a semi-transparent (dimmed) copy of {@code source} to indicate a
-	 * deselected/inactive state on region checkboxes.
-	 */
-	private static ImageIcon dimIcon(ImageIcon source)
-	{
-		if (source == null)
-		{
-			return null;
-		}
-		java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(
-			source.getIconWidth(), source.getIconHeight(), java.awt.image.BufferedImage.TYPE_INT_ARGB);
-		java.awt.Graphics2D g = out.createGraphics();
-		g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.30f));
-		g.drawImage(source.getImage(), 0, 0, null);
-		g.dispose();
-		return new ImageIcon(out);
-	}
-
 	private static String shortNameOf(WorldRegion region)
 	{
 		switch (region)
@@ -794,29 +835,6 @@ class SearchPanel extends PartyCardPanel
 			case SOUTH_AFRICA: return "ZA";
 			default: return region.name().substring(0, Math.min(2, region.name().length()));
 		}
-	}
-
-	private void setAllActivities(boolean selected)
-	{
-		if (selected)
-		{
-			selectedActivities.addAll(EnumSet.allOf(Activity.class));
-		}
-		else
-		{
-			selectedActivities.clear();
-		}
-		rebuildActivityList();
-		filtersChanged();
-	}
-
-	private JButton miniButton(String text)
-	{
-		JButton button = new JButton(text);
-		button.setFocusPainted(false);
-		button.setMargin(new Insets(0, 6, 0, 6));
-		button.setFont(FontManager.getRunescapeSmallFont());
-		return button;
 	}
 
 	/** Rebuild the grouped checkbox list. The nearby activity is highlighted in its group. */
@@ -836,16 +854,6 @@ class SearchPanel extends PartyCardPanel
 			groupLabel.setForeground(ColorScheme.BRAND_ORANGE);
 			groupLabel.setFont(new JLabel().getFont().deriveFont(Font.BOLD));
 			header.add(groupLabel, BorderLayout.WEST);
-
-			JPanel headerButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-			headerButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			JButton allBtn = miniButton("All");
-			allBtn.addActionListener(e -> setActivitiesInGroup(group, true));
-			JButton noneBtn = miniButton("None");
-			noneBtn.addActionListener(e -> setActivitiesInGroup(group, false));
-			headerButtons.add(allBtn);
-			headerButtons.add(noneBtn);
-			header.add(headerButtons, BorderLayout.EAST);
 			activityListPanel.add(header);
 
 			// Activity checkboxes
@@ -877,26 +885,10 @@ class SearchPanel extends PartyCardPanel
 		activityListPanel.repaint();
 	}
 
-	private void setActivitiesInGroup(ActivityGroup group, boolean selected)
-	{
-		for (Activity a : group.activities)
-		{
-			if (selected)
-			{
-				selectedActivities.add(a);
-			}
-			else
-			{
-				selectedActivities.remove(a);
-			}
-		}
-		rebuildActivityList();
-		filtersChanged();
-	}
-
 	/**
-	 * If the player is standing near an activity, float it to the top of the list
-	 * and make sure it's checked. No-op when the nearby activity hasn't changed.
+	 * If the player is standing near an activity, float it to the top of the list and
+	 * highlight it. No-op when the nearby activity hasn't changed. Does NOT auto-check
+	 * it — the user's explicit selection is never overridden (point 13).
 	 */
 	private void applyRecommendation()
 	{
@@ -906,10 +898,6 @@ class SearchPanel extends PartyCardPanel
 			return;
 		}
 		recommended = near;
-		if (near != null)
-		{
-			selectedActivities.add(near);
-		}
 		rebuildActivityList();
 		reapplyFilters();
 	}
@@ -961,7 +949,15 @@ class SearchPanel extends PartyCardPanel
 	{
 		persistFilters();
 		updateActiveFiltersLabel();
+		updateFiltersToggleText();
+		updateActivitiesToggleText();
 		reapplyFilters();
+		// Narrow/widen the server feed to match: scope to a single activity, else all. No-op on the
+		// socket when the scope is unchanged.
+		if (subscription != null)
+		{
+			subscription.setActivity(scopeActivityId());
+		}
 	}
 
 	// ---- filter persistence (remembered across sessions) ---------------------
@@ -979,6 +975,9 @@ class SearchPanel extends PartyCardPanel
 	private static final String KEY_SORT              = "searchSort";
 	private static final String KEY_LEARNER_FILTER    = "searchLearnerFilter";
 	private static final String KEY_HIDE_INELIGIBLE   = "searchHideIneligible";
+	private static final String KEY_FILTERS_EXPANDED  = "searchFiltersExpanded";
+	private static final String KEY_ACTIVITIES_EXPANDED = "searchActivitiesExpanded";
+	private static final String KEY_FIRST_RUN         = "searchInitialized";
 
 	/** Save the current filter selection so it's restored next session. */
 	private void persistFilters()
@@ -1009,13 +1008,23 @@ class SearchPanel extends PartyCardPanel
 		put(KEY_SORT, (String) sortComboBox.getSelectedItem());
 		put(KEY_LEARNER_FILTER, (String) learnerComboBox.getSelectedItem());
 		put(KEY_HIDE_INELIGIBLE, Boolean.toString(hideIneligibleFilter.isSelected()));
+		put(KEY_FILTERS_EXPANDED, Boolean.toString(filtersExpanded));
+		put(KEY_ACTIVITIES_EXPANDED, Boolean.toString(activitiesExpanded));
 	}
 
 	/** Restore the saved filter selection into the in-memory state and the controls. */
 	private void loadFilters()
 	{
+		// On the very first ever launch, start with no activities selected (all off).
+		// Persist the flag so subsequent launches restore the saved selection normally.
+		boolean firstRun = !Boolean.parseBoolean(get(KEY_FIRST_RUN));
+		if (firstRun)
+		{
+			put(KEY_FIRST_RUN, "true");
+		}
+
 		String activities = get(KEY_ACTIVITIES);
-		if (activities != null)
+		if (!firstRun && activities != null)
 		{
 			selectedActivities.clear();
 			for (String id : activities.split(","))
@@ -1087,6 +1096,8 @@ class SearchPanel extends PartyCardPanel
 			learnerComboBox.setSelectedItem(learnerFilter);
 		}
 		hideIneligibleFilter.setSelected(Boolean.parseBoolean(get(KEY_HIDE_INELIGIBLE)));
+		filtersExpanded = Boolean.parseBoolean(get(KEY_FILTERS_EXPANDED));
+		activitiesExpanded = Boolean.parseBoolean(get(KEY_ACTIVITIES_EXPANDED));
 	}
 
 	private static <T> String idsOf(Set<T> values, java.util.function.Function<T, String> id)
@@ -1206,7 +1217,69 @@ class SearchPanel extends PartyCardPanel
 		}
 		subscription = partyService.subscribeParties(
 			parties -> SwingUtilities.invokeLater(() -> acceptPushedParties(parties)),
-			error -> { /* transient socket drop; a reconnect re-subscribes and re-snapshots */ });
+			error -> SwingUtilities.invokeLater(this::updateConnectionView),
+			scopeActivityId());
+		updateConnectionView();
+	}
+
+	/** Swap the results area for an offline message + Reconnect button when the socket is down (point 52). */
+	private void updateConnectionView()
+	{
+		boolean down = subscription != null && !subscription.isConnected();
+		if (down == showingDisconnected)
+		{
+			return;
+		}
+		showingDisconnected = down;
+		remove(down ? scroll : disconnectedPanel());
+		add(down ? disconnectedPanel() : scroll, BorderLayout.CENTER);
+		revalidate();
+		repaint();
+	}
+
+	private JPanel disconnectedPanel()
+	{
+		if (disconnectedPanel == null)
+		{
+			disconnectedPanel = new JPanel(new GridBagLayout());
+			disconnectedPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+			JPanel col = new JPanel();
+			col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
+			col.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+			JLabel msg = new JLabel("Not connected to OSParty");
+			msg.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			msg.setFont(FontManager.getRunescapeSmallFont());
+			msg.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+			reconnectButton.setFocusPainted(false);
+			reconnectButton.setFont(FontManager.getRunescapeSmallFont());
+			reconnectButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+			reconnectButton.addActionListener(e -> {
+				if (subscription != null)
+				{
+					subscription.reconnect();
+					setStatus("Reconnecting…");
+				}
+			});
+
+			col.add(msg);
+			col.add(Box.createVerticalStrut(8));
+			col.add(reconnectButton);
+			disconnectedPanel.add(col);
+		}
+		return disconnectedPanel;
+	}
+
+	/**
+	 * The activity to scope the live subscription to: the single selected activity's id, or
+	 * {@code null} (= all) when zero or several are selected, since the server scopes to one. Local
+	 * filtering still narrows the displayed list; this just shrinks the server's fan-out to us.
+	 */
+	private String scopeActivityId()
+	{
+		return selectedActivities.size() == 1 ? selectedActivities.iterator().next().getId() : null;
 	}
 
 	/** Stop receiving the live list (the plugin's socket stays open for hosting). */
@@ -1226,6 +1299,7 @@ class SearchPanel extends PartyCardPanel
 	private void acceptPushedParties(List<Party> parties)
 	{
 		lastResults = parties;
+		updateConnectionView();
 		if (isShowing())
 		{
 			showResults(parties);
@@ -1266,6 +1340,7 @@ class SearchPanel extends PartyCardPanel
 
 		// Show only joinable parties matching every active filter (full ones hidden).
 		List<Party> visible = new ArrayList<>();
+		int totalOpen = 0; // all joinable parties, before filters (for the "X of total" count)
 		if (parties != null)
 		{
 			for (Party party : parties)
@@ -1274,6 +1349,7 @@ class SearchPanel extends PartyCardPanel
 				{
 					continue;
 				}
+				totalOpen++;
 				Activity act = Activity.fromId(party.getActivity());
 				if (act == null || !selectedActivities.contains(act))
 				{
@@ -1385,7 +1461,8 @@ class SearchPanel extends PartyCardPanel
 			+ "|l" + learnerComboBox.getSelectedIndex()
 			+ "|h" + hideIneligibleFilter.isSelected()
 			+ "|f" + friendSignatureOf(visible)
-			+ "|v" + favSignatureOf(visible);
+			+ "|v" + favSignatureOf(visible)
+			+ "|t" + totalOpen;
 		if (signature.equals(renderedSignature))
 		{
 			return;
@@ -1395,14 +1472,27 @@ class SearchPanel extends PartyCardPanel
 		resultsPanel.removeAll();
 		applyButtons.clear();
 		partiesById.clear();
+		reasonLabels.clear();
+		rolePickers.clear();
 
+		boolean filtersActive = countActiveFilters() > 0;
 		if (visible.isEmpty())
 		{
-			setStatus("No open parties match your filters.");
+			setStatus(filtersActive && totalOpen > 0
+				? "0 of " + totalOpen + " parties match your filters."
+				: "No open parties match your filters.");
 		}
 		else
 		{
-			setStatus(visible.size() + " open " + (visible.size() == 1 ? "party" : "parties") + ".");
+			if (filtersActive && totalOpen != visible.size())
+			{
+				setStatus(visible.size() + " of " + totalOpen + " open "
+					+ (totalOpen == 1 ? "party" : "parties") + ".");
+			}
+			else
+			{
+				setStatus(visible.size() + " open " + (visible.size() == 1 ? "party" : "parties") + ".");
+			}
 			for (Party party : visible)
 			{
 				resultsPanel.add(buildPartyCard(Activity.fromId(party.getActivity()), party));
@@ -1697,7 +1787,8 @@ class SearchPanel extends PartyCardPanel
 	/** Reset every filter to its default state. */
 	private void resetAllFilters()
 	{
-		selectedActivities.addAll(EnumSet.allOf(Activity.class));
+		// "All off" is the default activity state (point 9), so Reset clears them too.
+		selectedActivities.clear();
 		selectedRoles.clear();
 		for (WorldRegion r : KNOWN_REGIONS)
 		{

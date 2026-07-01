@@ -27,8 +27,6 @@ import net.runelite.client.ui.overlay.components.TextComponent;
  */
 public class TilePingOverlay extends Overlay
 {
-	/** Matches LiveParty's ping window so a ping fades out fully. */
-	private static final long ANIM_MS = 2_000;
 	private static final int MAX_RADIUS = 48;
 
 	private final Client client;
@@ -73,7 +71,8 @@ public class TilePingOverlay extends Overlay
 			{
 				continue;
 			}
-			double t = (now - ping.getCreatedAt()) / (double) ANIM_MS;
+			// Configurable (point 47); should match LiveParty's ping window for a clean fade-out.
+			double t = (now - ping.getCreatedAt()) / (double) config.pingAnimMs();
 			if (t < 0 || t > 1)
 			{
 				continue;

@@ -9,32 +9,39 @@ import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
 /**
- * A brief, self-dismissing in-game popup shown to a member when the party host
- * asks them to join the host's friends chat.
+ * A brief, self-dismissing in-game popup telling a member how to join the raid:
+ * join the host's friends chat (CoX), apply on the notice board (ToB), or apply on
+ * the Grouping Obelisk (ToA).
  */
 public class FcRequestOverlay extends OverlayPanel
 {
 	private volatile String hostName;
-	private volatile String friendsChat;
+	private volatile String title;
+	private volatile String detail;
 	private volatile long expiresAt;
 
 	public FcRequestOverlay()
 	{
-		setPosition(OverlayPosition.TOP_CENTER);
+		// Distinct anchor from the ready-check overlay (TOP_CENTER) so the two never
+		// stack; movable/snappable so the user can reposition it (point 41).
+		setPosition(OverlayPosition.TOP_RIGHT);
+		setMovable(true);
+		setSnappable(true);
 	}
 
-	public void show(String hostName, String friendsChat, long durationMs)
+	public void show(String hostName, String title, String detail, long durationMs)
 	{
 		this.hostName = hostName;
-		this.friendsChat = friendsChat;
+		this.title = title;
+		this.detail = detail;
 		this.expiresAt = System.currentTimeMillis() + durationMs;
 	}
 
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		String fc = friendsChat;
-		if (fc == null || System.currentTimeMillis() > expiresAt)
+		String d = detail;
+		if (d == null || System.currentTimeMillis() > expiresAt)
 		{
 			return null;
 		}
@@ -43,15 +50,23 @@ public class FcRequestOverlay extends OverlayPanel
 		panelComponent.setPreferredSize(new Dimension(230, 0));
 
 		panelComponent.getChildren().add(TitleComponent.builder()
-			.text("Friends chat request")
+			.text(title != null ? title : "Party")
 			.color(Color.ORANGE)
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
-			.left((hostName != null ? hostName : "The host") + " asks you to join:")
+			.left((hostName != null ? hostName : "The host") + ":")
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
-			.left(fc)
+			.left(d)
 			.leftColor(Color.YELLOW)
+			.build());
+
+		// Visible countdown so a glance tells you how long it stays (point 44).
+		int secs = (int) Math.ceil(Math.max(0, expiresAt - System.currentTimeMillis()) / 1000.0);
+		panelComponent.getChildren().add(LineComponent.builder()
+			.left("Closing in")
+			.right(secs + "s")
+			.rightColor(Color.ORANGE)
 			.build());
 
 		return super.render(graphics);
